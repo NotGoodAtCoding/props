@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "op-core"
+version = "0.1.0"
+description = "Lean MIT-licensed computational geometry kernel for open-source Prosthetics & Orthotics (O&P) CAD/CAM"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+accel = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "trimesh>=4.0",
+    "manifold3d>=2.5",
+]
+ampscan = ["ampscan"]
+
+[project.scripts]
+op-core = "op_core.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
