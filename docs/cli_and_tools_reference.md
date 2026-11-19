@@ -12,6 +12,15 @@
 
 Run via `PYTHONPATH=src python3 -m op_core.cli <command>` (or `op-core <command>` if installed via `pip install -e .`).
 
+### `op-core ui`
+Launches the zero-dependency local 3D WebGL browser workstation for interactive scan QA, click-to-place 3D landmarking, `M_0` rectification heatmaps, shell/lint preview, and artifact downloads.
+
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--host` | `127.0.0.1` | Bind address for local HTTP server. |
+| `--port` | `8765` | Bind port for local HTTP server. |
+| `--no-browser` | `False` | Start server without automatically opening a browser tab. |
+
 ### `op-core demo`
 Generates a synthetic clinical mesh + `.oprecipe.json`, executes the full pipeline, and writes all CAD/CAM outputs to `--out-dir`.
 
@@ -89,10 +98,12 @@ PYTHONPATH=src python3 scripts/run_experiments.py --exp EXP-1
 
 | Module | Purpose | Primary Entry Points |
 | :--- | :--- | :--- |
+| [`ui_server.py`](../src/op_core/ui_server.py) | Local WebGL 3D workstation & REST API (`SessionStore`, Moller-Trumbore picking) | `serve_ui()`, `create_server()` |
+| [`repair.py`](../src/op_core/repair.py) | Real-scan vertex welding, winding consistency repair, hole filling, Z-clipping | `repair_scan_mesh()`, `weld_and_clean()`, `fix_consistent_winding()`, `fill_small_holes()`, `clip_mesh_z()` |
 | [`scan_qa.py`](../src/op_core/scan_qa.py) | Chairside scan triage, canonical alignment, landmark-anchored tape check | `run_scan_qa()`, `align_canonical_limb()`, `measure_circumferences()`, `prune_floaters()`, `classify_boundary_loops()`, `detect_double_walls()`, `detect_seam_step()` |
 | [`recipe.py`](../src/op_core/recipe.py) | `.oprecipe.json` v0.1 validation, landmark resolution, diffing | `OpRecipe`, `LandmarkRef`, `diff_recipes()`, `mesh_sha256()` |
 | [`rectify.py`](../src/op_core/rectify.py) | Non-destructive `M_0` geodesic rectification & AFO posture neutralization | `apply_recipe()`, `apply_afo_posture()`, `RectificationResult` |
-| [`shell.py`](../src/op_core/shell.py) | Variable shelling, TT pyramid & AFO joint bosses, CNC carver molds | `build_tt_socket_shell()`, `build_afo_shell()`, `export_carver_positive()`, `compute_curve_min_radius()` |
+| [`shell.py`](../src/op_core/shell.py) | Variable shelling (TT, TF, AFO), bench alignment, hardware bosses, CNC carver molds | `build_tt_socket_shell()`, `build_tf_socket_shell()`, `build_afo_shell()`, `export_carver_positive()`, `has_manifold3d()` |
 | [`export_3mf.py`](../src/op_core/export_3mf.py) | Slicer-targeted `.3mf` writer embedding reinforcement modifier meshes | `export_3mf()` (`target="orcaslicer"` or `"prusaslicer"`) |
 | [`linter.py`](../src/op_core/linter.py) | Pre-print structural safety checks & archival MDR/QMSR dossier export | `lint_device()`, `estimate_min_wall_thickness_mm()`, `export_fabrication_dossier()` |
 | [`mesh.py`](../src/op_core/mesh.py) | Pure-Python triangle mesh, manifold audit, Dijkstra geodesics, STL I/O | `TriMesh`, `read_stl()`, `write_binary_stl()` |

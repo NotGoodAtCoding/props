@@ -1,0 +1,73 @@
+{
+  "alignment": {
+    "adduction_deg": 8.0,
+    "flexion_deg": 5.0,
+    "mpt_offset_mm": [
+      0.0,
+      0.0
+    ]
+  },
+  "device_type": "transfemoral_socket",
+  "kernel_version": "0.1.0",
+  "landmarks": {
+    "ischial_shelf": {
+      "xyz": [
+        0.0,
+        -58.0,
+        10.0
+      ]
+    },
+    "scarpas_triangle": {
+      "xyz": [
+        0.0,
+        56.0,
+        -10.0
+      ]
+    },
+    "trochanter": {
+      "xyz": [
+        58.0,
+        0.0,
+        -15.0
+      ]
+    }
+  },
+  "liner_thickness_mm": 3.0,
+  "operations": [
+    {
+      "id": "global_comp",
+      "op": "global_compression",
+      "percent": -4.0,
+      "transition_mm": 0.0,
+      "z_range_mm": [
+        -260.0,
+        60.0
+      ]
+    },
+    {
+      "id": "scarpas_compress",
+      "landmark": "scarpas_triangle",
+      "offset_mm": -5.0,
+      "op": "landmark_relief",
+      "radius_mm": 28.0
+    },
+    {
+      "id": "troch_relief",
+      "landmark": "trochanter",
+      "offset_mm": 4.0,
+      "op": "landmark_relief",
+      "radius_mm": 26.0
+    }
+  ],
+  "scale_factor": 1.0,
+  "scan_sha256": "",
+  "schema_version": "0.1",
+  "shell": {
+    "hardware": "pyramid_50_8_m6_captive",
+    "trimline_fillet_mm": 12.0,
+    "wall_distal_mm": 5.5,
+    "wall_proximal_mm": 3.0
+  },
+  "side": "left",
+  "units": "mm"
+}

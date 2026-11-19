@@ -15,8 +15,9 @@ from op_core.linter import lint_device
 from op_core.math3d import rodrigues_rotate, v_dist, v_dot, v_sub
 from op_core.recipe import OpRecipe
 from op_core.rectify import apply_afo_posture, apply_recipe
+from op_core.repair import repair_scan_mesh
 from op_core.scan_qa import measure_circumferences, run_scan_qa
-from op_core.shell import build_afo_shell, build_tt_socket_shell, export_carver_positive
+from op_core.shell import build_afo_shell, build_tf_socket_shell, build_tt_socket_shell, export_carver_positive
 from op_core.synthetic import corrupt_scan, generate_foot_ankle_mesh, generate_transtibial_limb
 
 
@@ -140,13 +141,30 @@ def run_exp2b_and_exp3() -> dict:
         if res.shell_mesh.is_watertight_manifold() and res.shell_mesh.signed_volume() > 0:
             afo_watertight += 1
 
+    # Hardening check: closed + torn unstructured limbs + transfemoral shell
+    hardened_ok = 0
+    for seed in range(3):
+        closed_raw = generate_transtibial_limb(open_cuff=False, seed=seed).mesh
+        torn = corrupt_scan(closed_raw, tear_hole=True, jitter_mm=0.2, seed=30 + seed)
+        repaired, _ = repair_scan_mesh(torn, ensure_open_cuff=True)
+        sh_tt = build_tt_socket_shell(repaired)
+        sh_tf = build_tf_socket_shell(repaired)
+        if (
+            sh_tt.shell_mesh.is_watertight_manifold()
+            and sh_tt.shell_mesh.signed_volume() > 0
+            and sh_tf.shell_mesh.is_watertight_manifold()
+            and sh_tf.shell_mesh.signed_volume() > 0
+        ):
+            hardened_ok += 1
+
     dt = time.perf_counter() - t0
     return {
         "tt_watertight": f"{tt_watertight}/10",
         "afo_watertight": f"{afo_watertight}/5",
+        "hardened_closed_torn_and_tf": f"{hardened_ok}/3",
         "max_alignment_err_deg": round(max_align_err_deg, 4),
         "elapsed_s": round(dt, 3),
-        "pass": tt_watertight == 10 and afo_watertight == 5 and max_align_err_deg <= 0.2,
+        "pass": tt_watertight == 10 and afo_watertight == 5 and hardened_ok == 3 and max_align_err_deg <= 0.2,
     }
 
 

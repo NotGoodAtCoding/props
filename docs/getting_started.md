@@ -28,7 +28,24 @@ op-core --help
 
 ---
 
-## 2. Walkthrough 1: Run the 30-Second Offline Demo
+## 2. Walkthrough 1: Launch the 3D Browser Workstation (`op-core ui`)
+
+For an interactive 5-step clinical workflow (zero external CDN or Three.js install required), start the local WebGL workstation:
+
+```bash
+PYTHONPATH=src python3 -m op_core.cli ui --port 8765
+```
+
+Inside your browser (`http://127.0.0.1:8765/`):
+1. **Step 1 (Scan QA):** Click **Sample TT**, **Sample TF**, **Sample AFO**, or upload any `.stl` scan (in mm) to inspect `PASS`/`WARN`/`FAIL` QA metrics and `20 mm` taut-tape slices.
+2. **Step 2 (Landmarks):** Click **Pick on 3D Mesh**, then click directly on the 3D limb surface to snap landmarks (`pt_bar`, `fibular_head`, `tibial_crest`, etc.).
+3. **Step 3 (Rectify):** Drag non-destructive `M_0` sliders and click **Apply & Preview Heatmap** to view compression (blue) and relief build-up (amber).
+4. **Step 4 (Shell & Lint):** Tune wall thickness and bench alignment (`flexion`, `adduction`, or AFO trimline fillet), then click **Compile Shell, .3MF & Carver**.
+5. **Step 5 (Export):** Download `device_shell.stl`, `device_<target>.3mf`, `carver_positive.stl`, `.oprecipe.json`, and `device_dossier.md`/`.json`.
+
+---
+
+## 3. Walkthrough 2: Run the 30-Second Offline CLI Demo
 
 If you don't have a patient `.stl` scan handy, use `demo` to generate a synthetic transtibial (TT) residual limb or Ankle-Foot Orthosis (AFO) scan and run the full pipeline:
 
