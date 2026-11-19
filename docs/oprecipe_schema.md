@@ -5,7 +5,7 @@
 # `.oprecipe.json` v0.1 Schema & Authoring Guide
 
 > **Who this page is for:** Clinicians, technicians, and UI integrators creating or inspecting portable rectification recipes.  
-> **Ready-to-run examples:** [`examples/tt_socket.oprecipe.json`](../examples/tt_socket.oprecipe.json), [`examples/tt_socket_v2.oprecipe.json`](../examples/tt_socket_v2.oprecipe.json), and [`examples/afo_leaf.oprecipe.json`](../examples/afo_leaf.oprecipe.json).
+> **Ready-to-run examples:** [`examples/tt_socket.oprecipe.json`](../examples/tt_socket.oprecipe.json), [`examples/tt_socket_v2.oprecipe.json`](../examples/tt_socket_v2.oprecipe.json), [`examples/tf_socket.oprecipe.json`](../examples/tf_socket.oprecipe.json), and [`examples/afo_leaf.oprecipe.json`](../examples/afo_leaf.oprecipe.json).
 
 ---
 

@@ -38,13 +38,16 @@
 Works immediately with **Python 3.11 / 3.12+** using only the standard library:
 
 ```bash
-# 1. Run an end-to-end offline demo (generates sample scan, recipe, STL, .3mf, carver mold, dossier)
+# 1. Launch the 3D Browser UI (interactive WebGL scan QA, click landmarks, sliders & exports)
+PYTHONPATH=src python3 -m op_core.cli ui --port 8765
+
+# 2. Or run an end-to-end offline CLI demo (generates sample scan, recipe, STL, .3mf, carver mold, dossier)
 PYTHONPATH=src python3 -m op_core.cli demo --out-dir ./demo_tt --device tt --target orcaslicer
 
-# 2. Try the Ankle-Foot Orthosis (AFO) demo
+# 3. Try the Ankle-Foot Orthosis (AFO) demo
 PYTHONPATH=src python3 -m op_core.cli demo --out-dir ./demo_afo --device afo --target prusaslicer
 
-# 3. Inspect CLI help for all commands (demo, qa, build, lint, diff)
+# 4. Inspect CLI help for all commands (ui, demo, qa, build, lint, diff)
 PYTHONPATH=src python3 -m op_core.cli --help
 ```
 
@@ -60,7 +63,7 @@ PYTHONPATH=src python3 -m op_core.cli --help
 | [**Getting Started**](./docs/getting_started.md) | Step-by-step walkthroughs for `demo`, `qa`, `build`, `diff`, and inspecting every output file. |
 | [**CLI & Tools Reference**](./docs/cli_and_tools_reference.md) | Complete flags, defaults, and Python module API guide for `op-core` and `scripts/run_experiments.py`. |
 | [**`.oprecipe.json` Schema**](./docs/oprecipe_schema.md) | Canonical coordinate frame (`+Z` proximal, `+Y` anterior) and field-by-field authoring cookbook. |
-| [**Examples (`examples/`)**](./examples/tt_socket.oprecipe.json) | Ready-to-run [`tt_socket.oprecipe.json`](./examples/tt_socket.oprecipe.json), [`tt_socket_v2.oprecipe.json`](./examples/tt_socket_v2.oprecipe.json), and [`afo_leaf.oprecipe.json`](./examples/afo_leaf.oprecipe.json). |
+| [**Examples (`examples/`)**](./examples/tt_socket.oprecipe.json) | Ready-to-run [`tt_socket.oprecipe.json`](./examples/tt_socket.oprecipe.json), [`tt_socket_v2.oprecipe.json`](./examples/tt_socket_v2.oprecipe.json), [`tf_socket.oprecipe.json`](./examples/tf_socket.oprecipe.json), and [`afo_leaf.oprecipe.json`](./examples/afo_leaf.oprecipe.json). |
 
 ### Strategy, Research & Benchmarks
 | Page | What You Will Find |
@@ -70,7 +73,8 @@ PYTHONPATH=src python3 -m op_core.cli --help
 | [**Validation Experiments**](./experiments/high_value_experiments.md) | Hypotheses, datasets, protocols, and quantitative pass/fail gates for `EXP-1` through `EXP-6`. |
 
 ### Code & Verification
-* **Core Package:** [`src/op_core/`](./src/op_core/__init__.py) (`cli`, `scan_qa`, `recipe`, `rectify`, `shell`, `export_3mf`, `linter`, `mesh`, `math3d`, `synthetic`).
-* **Unit Tests (`15` tests):** `PYTHONPATH=src python3 -m unittest discover -s tests -v`
+* **Core Package:** [`src/op_core/`](./src/op_core/__init__.py) (`ui_server`, `cli`, `scan_qa`, `repair`, `recipe`, `rectify`, `shell`, `export_3mf`, `linter`, `mesh`, `math3d`, `synthetic`).
+* **Unit Tests (`27` tests):** `PYTHONPATH=src python3 -m unittest discover -s tests -v`
 * **Experiment Runner (`EXP-1`–`EXP-5`):** `PYTHONPATH=src python3 scripts/run_experiments.py`
+* **External Dataset Fetcher:** `PYTHONPATH=src python3 scripts/fetch_openlimb.py --help`
 * **License:** [`LICENSE`](./LICENSE) (MIT).
