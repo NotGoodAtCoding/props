@@ -17,6 +17,8 @@ from .shell import compute_curve_min_radius
 
 @dataclass
 class LintReport:
+    """Pre-print structural and geometric safety check results."""
+
     passed: bool
     is_watertight_manifold: bool
     min_estimated_wall_mm: float
@@ -27,27 +29,38 @@ class LintReport:
 
 
 def estimate_min_wall_thickness_mm(shell_mesh: TriMesh) -> float:
-    """Estimate minimum opposing-wall thickness using opposing-normal spatial pairs."""
+    """Estimate minimum opposing-wall thickness using a spatial hash over opposing normal pairs."""
+    from collections import defaultdict
+
     verts = shell_mesh.vertices
     norms = shell_mesh.vertex_normals()
-    # Sample evenly across vertices for fast O(N) bound check
+    if not verts:
+        return 0.0
+
+    cell = 8.0
+    grid: dict[tuple[int, int, int], list[int]] = defaultdict(list)
+    for idx, (x, y, z) in enumerate(verts):
+        grid[(math.floor(x / cell), math.floor(y / cell), math.floor(z / cell))].append(idx)
+
     step = max(1, len(verts) // 400)
     min_thick = math.inf
     for i in range(0, len(verts), step):
         vi = verts[i]
         ni = norms[i]
-        # Skip flat bottom boss / pocket vertices near extreme zmin
+        gx, gy, gz = math.floor(vi[0] / cell), math.floor(vi[1] / cell), math.floor(vi[2] / cell)
         best = math.inf
-        for j in range(0, len(verts), step):
-            if i == j:
-                continue
-            d_vec = v_sub(verts[j], vi)
-            dist = v_norm(d_vec)
-            if 0.6 < dist < 12.0:
-                # Opposing wall: normal points opposite and vector aligns with inward normal
-                if v_dot(ni, norms[j]) < -0.75 and v_dot(v_unit(d_vec), ni) < -0.75:
-                    if dist < best:
-                        best = dist
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for j in grid.get((gx + dx, gy + dy, gz + dz), ()):
+                        if i == j:
+                            continue
+                        d_vec = v_sub(verts[j], vi)
+                        dist = v_norm(d_vec)
+                        if 0.6 < dist < 12.0:
+                            if v_dot(ni, norms[j]) < -0.75 and v_dot(v_unit(d_vec), ni) < -0.75:
+                                if dist < best:
+                                    best = dist
         if best < min_thick:
             min_thick = best
     return 0.0 if min_thick is math.inf else min_thick

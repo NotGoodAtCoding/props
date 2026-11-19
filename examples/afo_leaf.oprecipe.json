@@ -1,0 +1,63 @@
+{
+  "alignment": {
+    "adduction_deg": 0.0,
+    "flexion_deg": 0.0,
+    "mpt_offset_mm": [
+      0.0,
+      0.0
+    ]
+  },
+  "device_type": "afo",
+  "kernel_version": "0.1.0",
+  "landmarks": {
+    "lateral_malleolus": {
+      "xyz": [
+        38.0,
+        0.0,
+        54.0
+      ]
+    },
+    "medial_malleolus": {
+      "xyz": [
+        -38.0,
+        0.0,
+        58.0
+      ]
+    }
+  },
+  "liner_thickness_mm": 0.0,
+  "operations": [
+    {
+      "dorsiflexion_deg": 12.0,
+      "eversion_deg": 5.0,
+      "heel_pitch_mm": 10.0,
+      "id": "neutralize_ankle",
+      "op": "afo_posture"
+    },
+    {
+      "id": "medial_mal_relief",
+      "landmark": "medial_malleolus",
+      "offset_mm": 4.0,
+      "op": "landmark_relief",
+      "radius_mm": 22.0
+    },
+    {
+      "id": "lateral_mal_relief",
+      "landmark": "lateral_malleolus",
+      "offset_mm": 4.0,
+      "op": "landmark_relief",
+      "radius_mm": 22.0
+    }
+  ],
+  "scale_factor": 1.0,
+  "scan_sha256": "",
+  "schema_version": "0.1",
+  "shell": {
+    "hardware": "afo_coaxial_joint",
+    "trimline_fillet_mm": 10.0,
+    "wall_distal_mm": 4.5,
+    "wall_proximal_mm": 2.5
+  },
+  "side": "left",
+  "units": "mm"
+}

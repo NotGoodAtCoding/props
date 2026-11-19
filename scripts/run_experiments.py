@@ -184,14 +184,38 @@ def run_exp4_and_exp5() -> dict:
 
 
 if __name__ == "__main__":
+    import argparse
     import json
 
-    summary = {
-        "EXP-1": run_exp1(),
-        "EXP-2": run_exp2(),
-        "EXP-2B_and_EXP-3": run_exp2b_and_exp3(),
-        "EXP-4_and_EXP-5": run_exp4_and_exp5(),
+    parser = argparse.ArgumentParser(
+        prog="run_experiments.py",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Run reproducible op-core validation benchmarks (EXP-1 through EXP-5).\n"
+            "See experiments/high_value_experiments.md for hypothesis and pass/fail criteria."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  PYTHONPATH=src python3 scripts/run_experiments.py\n"
+            "  PYTHONPATH=src python3 scripts/run_experiments.py --exp EXP-1"
+        ),
+    )
+    parser.add_argument(
+        "--exp",
+        choices=["all", "EXP-1", "EXP-2", "EXP-2B_and_EXP-3", "EXP-4_and_EXP-5"],
+        default="all",
+        help="Run all experiments or a specific benchmark group (default: all)",
+    )
+    args = parser.parse_args()
+
+    runners = {
+        "EXP-1": run_exp1,
+        "EXP-2": run_exp2,
+        "EXP-2B_and_EXP-3": run_exp2b_and_exp3,
+        "EXP-4_and_EXP-5": run_exp4_and_exp5,
     }
+    selected = runners if args.exp == "all" else {args.exp: runners[args.exp]}
+    summary = {name: fn() for name, fn in selected.items()}
     print(json.dumps(summary, indent=2))
     all_passed = all(v["pass"] for v in summary.values())
     sys.exit(0 if all_passed else 1)
