@@ -18,8 +18,10 @@ from .shell import (
     CarverPositiveResult,
     ShellBuildResult,
     build_afo_shell,
+    build_tf_socket_shell,
     build_tt_socket_shell,
     export_carver_positive,
+    has_manifold3d,
 )
 
 __all__ = [
@@ -35,6 +37,7 @@ __all__ = [
     "apply_afo_posture",
     "apply_recipe",
     "build_afo_shell",
+    "build_tf_socket_shell",
     "build_tt_socket_shell",
     "clip_mesh_z",
     "diff_recipes",
@@ -43,6 +46,7 @@ __all__ = [
     "export_fabrication_dossier",
     "fill_small_holes",
     "fix_consistent_winding",
+    "has_manifold3d",
     "lint_device",
     "measure_circumferences",
     "mesh_sha256",

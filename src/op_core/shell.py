@@ -1,12 +1,12 @@
-"""Project 3: Watertight variable-thickness shelling, MPT bench alignment, captive-M6 pyramid boss, AFO shells, and carver positives."""
+"""Project 3: Watertight variable-thickness shelling, MPT/TKA bench alignment, hardware bosses, and carver molds."""
 
 from __future__ import annotations
 
+import importlib.util
 import math
 from dataclasses import dataclass, field
 
 from .math3d import (
-    Vec2,
     Vec3,
     rodrigues_rotate,
     smoothstep5,
@@ -20,6 +20,12 @@ from .math3d import (
     v_unit,
 )
 from .mesh import Tri, TriMesh
+from .repair import clip_mesh_z, repair_scan_mesh
+
+
+def has_manifold3d() -> bool:
+    """Return True if optional C++ `manifold3d` accelerator is installed."""
+    return importlib.util.find_spec("manifold3d") is not None
 
 
 @dataclass
@@ -44,21 +50,28 @@ class CarverPositiveResult:
     recommended_cant_deg: float
 
 
-def _smooth_normals(mesh: TriMesh, iterations: int = 3) -> list[Vec3]:
-    """Laplacian-smooth vertex normals to prevent offset self-intersections in concavities."""
+def _smooth_normals(mesh: TriMesh, iterations: int = 4) -> list[Vec3]:
+    """Laplacian-smooth vertex normals and guard against concavity foldovers."""
     adj: list[set[int]] = [set() for _ in mesh.vertices]
     for a, b, c in mesh.faces:
         adj[a].update((b, c))
         adj[b].update((a, c))
         adj[c].update((a, b))
     normals = mesh.vertex_normals()
+    cx, cy, cz = mesh.centroid()
     for _ in range(iterations):
         nxt: list[Vec3] = []
         for i, n in enumerate(normals):
             acc = n
             for nb in adj[i]:
                 acc = v_add(acc, v_scale(normals[nb], 0.35))
-            nxt.append(v_unit(acc, fallback=n))
+            sm = v_unit(acc, fallback=n)
+            # Ensure normal stays outward relative to radial shaft direction in concavities
+            p = mesh.vertices[i]
+            rad = v_unit((p[0] - cx, p[1] - cy, 0.0), fallback=sm)
+            if v_dot(sm, rad) < -0.25:
+                sm = v_unit(v_add(v_scale(sm, 0.7), v_scale(rad, 0.3)), fallback=sm)
+            nxt.append(sm)
         normals = nxt
     return normals
 
@@ -83,47 +96,89 @@ def _bridge_rings_manifold(
             faces.append((b0, b1, a1))
 
 
-def _distal_ring_from_open_limb(mesh: TriMesh) -> tuple[list[int], int]:
-    """Identify the distal pole vertex and its surrounding ring on a limb positive."""
-    distal_idx = min(range(len(mesh.vertices)), key=lambda i: mesh.vertices[i][2])
-    # Collect faces incident to distal_idx and extract ordered ring around distal_idx
-    adj_next: dict[int, int] = {}
-    for a, b, c in mesh.faces:
-        if a == distal_idx:
-            adj_next[b] = c
-        elif b == distal_idx:
-            adj_next[c] = a
-        elif c == distal_idx:
-            adj_next[a] = b
-    if not adj_next:
-        raise ValueError("Distal pole vertex has no incident faces")
-    start = next(iter(adj_next))
-    ring = [start]
-    cur = adj_next[start]
-    while cur != start and len(ring) <= len(adj_next) + 1:
-        ring.append(cur)
-        cur = adj_next.get(cur, start)
-    return ring, distal_idx
+def _bridge_unequal_rings_manifold(
+    outer_cw: list[int],
+    boss_cw: list[int],
+    verts: list[Vec3],
+    faces: list[Tri],
+    center_xy: tuple[float, float],
+) -> None:
+    """Bridge an arbitrary M-vertex CW outer loop (with free edges (o_nxt, o_cur)) to an
+    N-vertex CW boss top loop (with free edges (b_cur, b_nxt)) with zero winding mismatches.
+    """
+    m = len(outer_cw)
+    n = len(boss_cw)
+    if m < 3 or n < 3:
+        raise ValueError("Cannot bridge ring with fewer than 3 vertices")
+
+    # Align starting vertex on outer_cw closest in XY angle to boss_cw[0]
+    b0 = verts[boss_cw[0]]
+    b0_ang = math.atan2(b0[1] - center_xy[1], b0[0] - center_xy[0]) % (2.0 * math.pi)
+    s0 = min(
+        range(m),
+        key=lambda i: abs(
+            ((math.atan2(verts[outer_cw[i]][1] - center_xy[1], verts[outer_cw[i]][0] - center_xy[0]) % (2.0 * math.pi)) - b0_ang + math.pi)
+            % (2.0 * math.pi)
+            - math.pi
+        ),
+    )
+    outer = outer_cw[s0:] + outer_cw[:s0]
+
+    oi, bi = 0, 0
+    while oi < m or bi < n:
+        o_cur = outer[oi % m]
+        o_nxt = outer[(oi + 1) % m]
+        b_cur = boss_cw[bi % n]
+        b_nxt = boss_cw[(bi + 1) % n]
+        if oi == m:
+            faces.append((b_nxt, b_cur, o_cur))
+            bi += 1
+        elif bi == n:
+            faces.append((o_cur, o_nxt, b_cur))
+            oi += 1
+        elif oi == m - 1 and bi < n:
+            # Exhaust boss ring before final outer step so closing spoke cancels step 0
+            faces.append((b_nxt, b_cur, o_cur))
+            bi += 1
+        elif (oi + 1) / m <= (bi + 1) / n:
+            faces.append((o_cur, o_nxt, b_cur))
+            oi += 1
+        else:
+            faces.append((b_nxt, b_cur, o_cur))
+            bi += 1
+
+
+def _order_loop_matching_boundary(mesh: TriMesh, loop: list[int]) -> list[int]:
+    """Ensure `loop` follows the mesh's directed boundary half-edges `(loop[k], loop[k+1])`."""
+    half = {(a, b) for a, b, c in mesh.faces} | {(b, c) for a, b, c in mesh.faces} | {(c, a) for a, b, c in mesh.faces}
+    if len(loop) >= 2 and (loop[0], loop[1]) not in half:
+        return list(reversed(loop))
+    return list(loop)
+
+
+def _loop_signed_area_xy(verts: list[Vec3], loop: list[int]) -> float:
+    s = 0.0
+    for k in range(len(loop)):
+        x0, y0, _ = verts[loop[k]]
+        x1, y1, _ = verts[loop[(k + 1) % len(loop)]]
+        s += x0 * y1 - x1 * y0
+    return 0.5 * s
 
 
 def _build_captive_m6_pyramid_boss_cap(
-    top_ring_pts: list[Vec3],
     boss_center: Vec3,
-    boss_normal: Vec3,
     flexion_deg: float,
     adduction_deg: float,
     boss_radius_mm: float = 36.0,
     boss_thickness_mm: float = 18.0,
     bcd_mm: float = 50.8,
+    n_seg: int = 64,
 ) -> tuple[list[Vec3], list[Tri], list[int]]:
-    """Construct a watertight 4-hole 50.8 mm BCD M6 captive-nut boss cap.
+    """Construct a fixed-64-segment watertight 4-hole 50.8 mm BCD M6 captive-nut boss cap.
 
-    Returns (vertices, faces, top_ring_local_indices) where `top_ring_local_indices`
-    matches the angular order of `top_ring_pts` so it bridges seamlessly onto `S_out`.
+    Returns `(verts, faces, top_ring_cw_indices)` where `top_ring_cw_indices` runs CW
+    around `+ez` with free directed edges `(top[k], top[k+1])` on the boss side wall.
     """
-    n_seg = len(top_ring_pts)
-    # Build aligned basis for boss plane: start from world Z down=(0,0,-1),
-    # rotate by flexion_deg around X and adduction_deg around Y.
     def align_vec(p: Vec3) -> Vec3:
         q = rodrigues_rotate(p, (1.0, 0.0, 0.0), math.radians(flexion_deg))
         q = rodrigues_rotate(q, (0.0, 1.0, 0.0), math.radians(adduction_deg))
@@ -131,7 +186,7 @@ def _build_captive_m6_pyramid_boss_cap(
 
     ex = align_vec((1.0, 0.0, 0.0))
     ey = align_vec((0.0, 1.0, 0.0))
-    ez = align_vec((0.0, 0.0, 1.0))  # Points proximally (up into socket)
+    ez = align_vec((0.0, 0.0, 1.0))
 
     def to_world(lx: float, ly: float, lz: float) -> Vec3:
         return (
@@ -143,17 +198,11 @@ def _build_captive_m6_pyramid_boss_cap(
     verts: list[Vec3] = []
     faces: list[Tri] = []
 
-    # Match angular orientation of top_ring_pts around boss_center in (ex, ey)
-    angles = []
-    for p in top_ring_pts:
-        d = v_sub(p, boss_center)
-        angles.append(math.atan2(v_dot(d, ey), v_dot(d, ex)))
-
-    # Ensure n_seg is divisible by 4 or use fixed 64-vertex boss outer ring mapped cleanly:
-    # We construct the boss directly with `n_seg` outer vertices aligned to `angles`!
+    # Build CW outer ring (ang descending) so side wall has free edges (top[k], top[k+1])
     top_ring_idx: list[int] = []
     bot_ring_idx: list[int] = []
-    for ang in angles:
+    for k in range(n_seg):
+        ang = -2.0 * math.pi * k / n_seg
         lx = boss_radius_mm * math.cos(ang)
         ly = boss_radius_mm * math.sin(ang)
         top_ring_idx.append(len(verts))
@@ -161,37 +210,27 @@ def _build_captive_m6_pyramid_boss_cap(
         bot_ring_idx.append(len(verts))
         verts.append(to_world(lx, ly, 0.0))
 
-    # Side cylindrical wall of boss (top_ring -> bot_ring)
     _bridge_rings_manifold(top_ring_idx, bot_ring_idx, faces, flip=False)
 
-    # Bottom planar face with 4 recessed hexagonal M6 captive-nut pockets at 50.8 mm BCD
-    # Divide bottom ring into 4 quadrants centered at 45, 135, 225, 315 deg
     r_bc = bcd_mm * 0.5  # 25.4 mm
-    r_hex = 5.8          # 10 mm across-flats M6 hex nut pocket radius
-    pocket_depth = 8.0   # 8 mm deep pocket inside 18 mm boss
+    r_hex = 5.8          # M6 nut pocket radius
+    pocket_depth = 8.0
 
     center_bot_idx = len(verts)
     verts.append(to_world(0.0, 0.0, 0.0))
 
-    # Group bot_ring_idx into 4 quadrant arcs by angle in [0, 2pi)
-    norm_angles = [(ang % (2.0 * math.pi), idx) for ang, idx in zip(angles, bot_ring_idx)]
-    # Sort CCW around boss bottom
-    # Note: top_ring_pts from distal pole ring is usually CW or CCW; inspect winding sign
-    ang_diffs = sum(
-        math.sin(angles[(k + 1) % n_seg] - angles[k]) for k in range(n_seg)
-    )
-    ccw_bot = list(bot_ring_idx) if ang_diffs > 0 else list(reversed(bot_ring_idx))
-    ccw_angs = [a % (2.0 * math.pi) for a in (angles if ang_diffs > 0 else reversed(angles))]
+    # Reverse bot_ring_idx to get CCW ordering around (ex, ey) for clean quadrant slicing
+    ccw_bot = list(reversed(bot_ring_idx))
+    ccw_angs = [
+        math.atan2(v_dot(v_sub(verts[idx], boss_center), ey), v_dot(v_sub(verts[idx], boss_center), ex)) % (2.0 * math.pi)
+        for idx in ccw_bot
+    ]
 
-    # Create 4 quadrant boundary indices on outer ring closest to 0, 90, 180, 270 deg
     sep_targets = [0.0, 0.5 * math.pi, math.pi, 1.5 * math.pi]
-    sep_pos: list[int] = []
-    for targ in sep_targets:
-        best_pos = min(
-            range(n_seg),
-            key=lambda p: abs(((ccw_angs[p] - targ + math.pi) % (2.0 * math.pi)) - math.pi),
-        )
-        sep_pos.append(best_pos)
+    sep_pos = [
+        min(range(n_seg), key=lambda p: abs(((ccw_angs[p] - targ + math.pi) % (2.0 * math.pi)) - math.pi))
+        for targ in sep_targets
+    ]
 
     for q in range(4):
         p_start = sep_pos[q]
@@ -203,14 +242,10 @@ def _build_captive_m6_pyramid_boss_cap(
             p = (p + 1) % n_seg
         arc.append(ccw_bot[p_end])
 
-        # Hex pocket center at 45 + 90*q degrees on 50.8 mm BCD
         hole_ang = math.radians(45.0 + 90.0 * q)
         hx = r_bc * math.cos(hole_ang)
         hy = r_bc * math.sin(hole_ang)
 
-        # Build 6-vertex hex ring on bottom face (z=0) and recessed top (z=pocket_depth)
-        # Note: bottom face normal points -ez (downward). For a vertex loop around hole
-        # ordered CCW in (ex, ey), bridging outer sector to inner hex ring gives -ez normal.
         hex_bot: list[int] = []
         hex_top: list[int] = []
         for k in range(6):
@@ -222,8 +257,6 @@ def _build_captive_m6_pyramid_boss_cap(
             hex_top.append(len(verts))
             verts.append(to_world(px, py, pocket_depth))
 
-        # Pocket wall and recessed floor
-        # Bottom face triangles traverse hex_cw as (i_nxt, i_cur) = hex_bot CCW -> pocket wall needs flip=False.
         _bridge_rings_manifold(hex_top, hex_bot, faces, flip=False)
         hex_center = len(verts)
         verts.append(to_world(hx, hy, pocket_depth))
@@ -231,117 +264,115 @@ def _build_captive_m6_pyramid_boss_cap(
             kn = (k + 1) % 6
             faces.append((hex_top[kn], hex_top[k], hex_center))
 
-        # Sector outer boundary must run CW in (ex, ey) to match side-wall free edges and produce -ez normal.
         sector_cw = [center_bot_idx] + list(reversed(arc))
         m_sec = len(sector_cw)
         hx_w = to_world(hx, hy, 0.0)
-        sec_angs = []
-        for v_idx in sector_cw:
-            d = v_sub(verts[v_idx], hx_w)
-            sec_angs.append(math.atan2(v_dot(d, ey), v_dot(d, ex)) % (2.0 * math.pi))
-
-        # Inner hole loop ordered CW around (hx, hy) so (o_cur, i_nxt, i_cur) produces -ez normal
+        sec_angs = [
+            math.atan2(v_dot(v_sub(verts[v_idx], hx_w), ey), v_dot(v_sub(verts[v_idx], hx_w), ex)) % (2.0 * math.pi)
+            for v_idx in sector_cw
+        ]
         hex_cw = list(reversed(hex_bot))
-        h0_ang = math.atan2(
-            v_dot(v_sub(verts[hex_cw[0]], hx_w), ey),
-            v_dot(v_sub(verts[hex_cw[0]], hx_w), ex),
-        ) % (2.0 * math.pi)
-        s0 = min(
-            range(m_sec),
-            key=lambda i: abs(((sec_angs[i] - h0_ang + math.pi) % (2.0 * math.pi)) - math.pi),
-        )
+        h0_ang = math.atan2(v_dot(v_sub(verts[hex_cw[0]], hx_w), ey), v_dot(v_sub(verts[hex_cw[0]], hx_w), ex)) % (2.0 * math.pi)
+        s0 = min(range(m_sec), key=lambda i: abs(((sec_angs[i] - h0_ang + math.pi) % (2.0 * math.pi)) - math.pi))
         outer = sector_cw[s0:] + sector_cw[:s0]
+
         oi, ii = 0, 0
-        while oi < len(outer) or ii < 6:
-            o_cur = outer[oi % len(outer)]
-            o_nxt = outer[(oi + 1) % len(outer)]
+        while oi < m_sec or ii < 6:
+            o_cur = outer[oi % m_sec]
+            o_nxt = outer[(oi + 1) % m_sec]
             i_cur = hex_cw[ii % 6]
             i_nxt = hex_cw[(ii + 1) % 6]
-            if oi == len(outer):
+            if oi == m_sec:
                 faces.append((o_cur, i_nxt, i_cur))
                 ii += 1
             elif ii == 6:
                 faces.append((o_cur, o_nxt, i_cur))
                 oi += 1
-            elif oi == len(outer) - 1 and ii < 6:
-                # Exhaust inner ring before the final outer step so closing spoke cancels step 0
+            elif oi == m_sec - 1 and ii < 6:
                 faces.append((o_cur, i_nxt, i_cur))
                 ii += 1
-            elif (oi + 1) / len(outer) <= (ii + 1) / 6.0:
+            elif (oi + 1) / m_sec <= (ii + 1) / 6.0:
                 faces.append((o_cur, o_nxt, i_cur))
                 oi += 1
             else:
                 faces.append((o_cur, i_nxt, i_cur))
                 ii += 1
 
-    # Ensure outer ring winding matches `top_ring_pts` order when bridged
-    if ang_diffs <= 0:
-        # Caller's ring is CW, flip boss faces? Wait: boss side wall used `top_ring_idx` in caller's order,
-        # which only needs reversal if caller's ring order differed from S_out's boundary order.
-        pass
-
     return verts, faces, top_ring_idx
 
 
-def build_tt_socket_shell(
+def _build_socket_shell_core(
     rectified_positive: TriMesh,
-    wall_distal_mm: float = 4.5,
-    wall_proximal_mm: float = 2.5,
-    flexion_deg: float = 5.0,
-    adduction_deg: float = 5.0,
-    brim_round_segments: int = 3,
+    wall_distal_mm: float,
+    wall_proximal_mm: float,
+    flexion_deg: float,
+    adduction_deg: float,
+    brim_round_segments: int,
+    hardware_tag: str,
+    alignment_type: str,
 ) -> ShellBuildResult:
-    """Build a watertight TT socket shell with rounded brim and bench-aligned captive-M6 pyramid boss."""
-    pos = rectified_positive.copy()
-    cuffs = pos.boundary_loops()
-    if len(cuffs) != 1:
-        raise ValueError(f"Expected 1 proximal cuff loop on limb positive, found {len(cuffs)}")
-    cuff_loop = cuffs[0]
-
-    # Normalize cuff loop orientation to match positive's boundary edge direction
-    pos_half = {(a, b) for a, b, c in pos.faces} | {(b, c) for a, b, c in pos.faces} | {(c, a) for a, b, c in pos.faces}
-    if (cuff_loop[0], cuff_loop[1]) not in pos_half:
-        cuff_loop = list(reversed(cuff_loop))
+    """Arbitrary-mesh socket shell builder using planar distal clipping + unequal-ring manifold bridging."""
+    pos, _ = repair_scan_mesh(rectified_positive, fill_holes=True, ensure_open_cuff=True)
+    loops = pos.boundary_loops()
+    if len(loops) != 1:
+        raise ValueError(f"Expected 1 proximal cuff loop after repair, found {len(loops)}")
+    cuff_loop = _order_loop_matching_boundary(pos, loops[0])
 
     zmin, zmax = pos.bounds()[0][2], pos.bounds()[1][2]
     zspan = max(1e-6, zmax - zmin)
     n_smooth = _smooth_normals(pos, iterations=4)
 
-    # Identify distal pole + surrounding ring to replace outer cap with bench-aligned pyramid boss
-    dist_ring, dist_pole = _distal_ring_from_open_limb(pos)
-
-    # Build S_in (reversed faces of pos) + S_out (excluding triangles touching dist_pole)
-    verts: list[Vec3] = list(pos.vertices)
-    faces: list[Tri] = [(a, c, b) for a, b, c in pos.faces]  # S_in faces inward
-
-    out_map: dict[int, int] = {}
+    # Build full S_out first, then clip its distal tip cleanly at a plane to handle arbitrary topology
+    out_full_verts: list[Vec3] = []
     for i, v in enumerate(pos.vertices):
-        if i == dist_pole:
-            continue
         t_prox = max(0.0, min(1.0, (v[2] - zmin) / zspan))
         thick = wall_distal_mm * (1.0 - t_prox) + wall_proximal_mm * t_prox
-        out_map[i] = len(verts)
-        verts.append(v_add(v, v_scale(n_smooth[i], thick)))
+        out_full_verts.append(v_add(v, v_scale(n_smooth[i], thick)))
+    s_out_full = TriMesh(vertices=out_full_verts, faces=list(pos.faces))
 
-    for a, b, c in pos.faces:
-        if dist_pole in (a, b, c):
-            continue
-        faces.append((out_map[a], out_map[b], out_map[c]))
+    z_out_min = s_out_full.bounds()[0][2]
+    z_clip = z_out_min + min(18.0, 0.14 * zspan)
+    s_out_clipped = clip_mesh_z(s_out_full, z_cut=z_clip, keep_above=True)
+    out_loops = s_out_clipped.boundary_loops()
+    if len(out_loops) != 2:
+        raise ValueError(f"Expected 2 boundary loops on clipped outer shell, found {len(out_loops)}")
 
-    # Rounded proximal brim bridging cuff_loop (S_in) to [out_map[i]] (S_out)
+    # Separate proximal outer cuff loop (highest Z) from distal clipped loop (at z_clip)
+    out_loops_sorted = sorted(
+        out_loops,
+        key=lambda lp: sum(s_out_clipped.vertices[i][2] for i in lp) / len(lp),
+    )
+    out_dist_loop = _order_loop_matching_boundary(s_out_clipped, out_loops_sorted[0])
+    out_cuff_raw = out_loops_sorted[1]
+
+    # Align out_cuff_ring indices 1-to-1 with cuff_loop by nearest vertex on untouched proximal cuff
+    cuff_pts_out = [out_full_verts[i] for i in cuff_loop]
+    out_cuff_ring = [
+        min(out_cuff_raw, key=lambda j: v_dist(s_out_clipped.vertices[j], target_pt))
+        for target_pt in cuff_pts_out
+    ]
+
+    # Combine S_in (reversed pos) + s_out_clipped into single vertex/face buffer
+    verts: list[Vec3] = list(pos.vertices)
+    faces: list[Tri] = [(a, c, b) for a, b, c in pos.faces]  # S_in inward
+
+    s_out_off = len(verts)
+    verts.extend(s_out_clipped.vertices)
+    for a, b, c in s_out_clipped.faces:
+        faces.append((s_out_off + a, s_out_off + b, s_out_off + c))
+
     in_ring = list(cuff_loop)
-    out_ring = [out_map[i] for i in cuff_loop]
+    out_ring = [s_out_off + idx for idx in out_cuff_ring]
     prev_ring = in_ring
     for step in range(1, brim_round_segments):
         ang = math.pi * step / brim_round_segments
         mid_ring: list[int] = []
-        for idx in cuff_loop:
-            p_in = verts[idx]
-            p_out = verts[out_map[idx]]
+        for idx_in, idx_out in zip(in_ring, out_ring):
+            p_in = verts[idx_in]
+            p_out = verts[idx_out]
             center = v_scale(v_add(p_in, p_out), 0.5)
             half_vec = v_scale(v_sub(p_out, p_in), 0.5)
             r_half = v_norm(half_vec)
-            # Bulge proximally along +Z by r_half * sin(ang)
             pos_pt = (
                 center[0] - half_vec[0] * math.cos(ang),
                 center[1] - half_vec[1] * math.cos(ang),
@@ -353,24 +384,21 @@ def build_tt_socket_shell(
         prev_ring = mid_ring
     _bridge_rings_manifold(prev_ring, out_ring, faces, flip=False)
 
-    # Distal outer ring on S_out around removed dist_pole
-    # Check winding of dist_ring on S_out: each face (dist_pole, b, c) had edge (b, c) on S_out boundary
-    # Verify edge (dist_ring[0], dist_ring[1]) exists in S_out
-    s_out_edges = {(a, b) for a, b, c in pos.faces if dist_pole not in (a, b, c)}
-    s_out_edges |= {(b, c) for a, b, c in pos.faces if dist_pole not in (a, b, c)}
-    s_out_edges |= {(c, a) for a, b, c in pos.faces if dist_pole not in (a, b, c)}
-    if (dist_ring[0], dist_ring[1]) in s_out_edges:
-        dist_ring = list(reversed(dist_ring))
+    # Order out_dist_loop CW in XY (and verify it keeps s_out_clipped's directed boundary edges (o_nxt, o_cur))
+    # Remember: s_out_clipped has outward normals; on its bottom clip at z_clip, boundary edges run CCW
+    # when viewed from +Z, meaning _order_loop_matching_boundary gives CCW -> reversing gives CW with free edges (o_nxt, o_cur).
+    if _loop_signed_area_xy(s_out_clipped.vertices, out_dist_loop) > 0.0:
+        out_dist_cw = list(reversed(out_dist_loop))
+    else:
+        out_dist_cw = list(out_dist_loop)
+    out_dist_global = [s_out_off + idx for idx in out_dist_cw]
 
-    out_dist_ring = [out_map[i] for i in dist_ring]
-    out_dist_pts = [verts[i] for i in out_dist_ring]
-    pole_pt = pos.vertices[dist_pole]
-    boss_center = (pole_pt[0], pole_pt[1], pole_pt[2] - 24.0)
+    cx_d = sum(verts[i][0] for i in out_dist_global) / len(out_dist_global)
+    cy_d = sum(verts[i][1] for i in out_dist_global) / len(out_dist_global)
+    boss_center = (cx_d, cy_d, z_clip - 22.0)
 
     boss_verts, boss_faces, boss_top_local = _build_captive_m6_pyramid_boss_cap(
-        top_ring_pts=out_dist_pts,
         boss_center=boss_center,
-        boss_normal=(0.0, 0.0, -1.0),
         flexion_deg=flexion_deg,
         adduction_deg=adduction_deg,
     )
@@ -378,15 +406,11 @@ def build_tt_socket_shell(
     verts.extend(boss_verts)
     for a, b, c in boss_faces:
         faces.append((base_off + a, base_off + b, base_off + c))
-
     boss_top_global = [base_off + idx for idx in boss_top_local]
-    # S_out has (out_dist_ring[k+1], out_dist_ring[k]) and boss side wall has (boss_top[k], boss_top[k+1]).
-    # Bridging with flip=True emits (out_dist_ring[k], out_dist_ring[k+1]) and (boss_top[k+1], boss_top[k]).
-    _bridge_rings_manifold(boss_top_global, out_dist_ring, faces, flip=True)
+
+    _bridge_unequal_rings_manifold(out_dist_global, boss_top_global, verts, faces, center_xy=(cx_d, cy_d))
 
     shell = TriMesh(vertices=verts, faces=faces)
-
-    # Build distal reinforcement modifier volume for .3mf export (cylinder covering distal 45 mm)
     mod_mesh = _build_cylinder_mesh(
         center=(boss_center[0], boss_center[1], boss_center[2] - 2.0),
         radius_mm=48.0,
@@ -402,11 +426,54 @@ def build_tt_socket_shell(
         alignment_normal=v_unit(align_n),
         trimline_min_radius_mm=15.0,
         hardware_metrics={
-            "hardware": "pyramid_50_8_m6_captive",
+            "hardware": hardware_tag,
+            "alignment_reference": alignment_type,
             "bcd_mm": 50.8,
             "flexion_deg": flexion_deg,
             "adduction_deg": adduction_deg,
         },
+    )
+
+
+def build_tt_socket_shell(
+    rectified_positive: TriMesh,
+    wall_distal_mm: float = 4.5,
+    wall_proximal_mm: float = 2.5,
+    flexion_deg: float = 5.0,
+    adduction_deg: float = 5.0,
+    brim_round_segments: int = 3,
+) -> ShellBuildResult:
+    """Build a watertight TT socket shell with rounded brim and MPT-aligned captive-M6 pyramid boss."""
+    return _build_socket_shell_core(
+        rectified_positive=rectified_positive,
+        wall_distal_mm=wall_distal_mm,
+        wall_proximal_mm=wall_proximal_mm,
+        flexion_deg=flexion_deg,
+        adduction_deg=adduction_deg,
+        brim_round_segments=brim_round_segments,
+        hardware_tag="pyramid_50_8_m6_captive",
+        alignment_type="tt_mpt_bisection_plumb_line",
+    )
+
+
+def build_tf_socket_shell(
+    rectified_positive: TriMesh,
+    wall_distal_mm: float = 5.5,
+    wall_proximal_mm: float = 3.0,
+    flexion_deg: float = 5.0,
+    adduction_deg: float = 8.0,
+    brim_round_segments: int = 3,
+) -> ShellBuildResult:
+    """Build a watertight transfemoral (TF) socket shell with TKA-aligned captive-M6 pyramid boss."""
+    return _build_socket_shell_core(
+        rectified_positive=rectified_positive,
+        wall_distal_mm=wall_distal_mm,
+        wall_proximal_mm=wall_proximal_mm,
+        flexion_deg=flexion_deg,
+        adduction_deg=adduction_deg,
+        brim_round_segments=brim_round_segments,
+        hardware_tag="pyramid_50_8_m6_captive",
+        alignment_type="tf_tka_plumb_line",
     )
 
 
@@ -467,26 +534,14 @@ def build_afo_shell(
     joint_z_mm: float = 56.0,
 ) -> ShellBuildResult:
     """Build a watertight posterior-leaf / solid AFO shell with malleolar fillets & coaxial joint bosses."""
-    # Extract clean posterior calf + ankle neck + plantar footplate strip from grid-structured foot mesh
-    # Infer angular & ring dimensions or use spatial mask for posterior/plantar region, then build clean watertight shell
-    # For general watertight guarantee: offset full posterior/plantar patch cleanly via parametric AFO manifold grid
-    bounds_min, bounds_max = neutral_foot_mesh.bounds()
-    n_smooth = _smooth_normals(neutral_foot_mesh, iterations=3)
-
-    # Identify posterior/plantar faces for AFO trimline (keeping posterior calf x/y<15 and plantar sole)
-    # Build smooth trimline curve with enforced R >= trimline_fillet_mm
     keep_face_mask: list[bool] = []
     for a, b, c in neutral_foot_mesh.faces:
         pts = [neutral_foot_mesh.vertices[idx] for idx in (a, b, c)]
         cy = sum(p[1] for p in pts) / 3.0
         cz = sum(p[2] for p in pts) / 3.0
-        # Posterior calf above ankle (cz > 75): keep posterior ~190 deg (cy < 10)
-        # Ankle neck (40 <= cz <= 75): sweep trimline smoothly behind malleoli with fillet
-        # Footplate (cz < 40): keep plantar bottom (cz < 24)
         if cz > 75.0:
             keep = cy < 12.0
         elif cz >= 38.0:
-            # Smooth sinusoidal malleolar fillet transition
             t = (cz - 38.0) / 37.0
             y_cut = 35.0 * (1.0 - smoothstep5(t)) + 12.0 * smoothstep5(t)
             keep = cy < y_cut
@@ -497,17 +552,14 @@ def build_afo_shell(
     kept_faces = [f for f, k in zip(neutral_foot_mesh.faces, keep_face_mask) if k]
     kept_verts = {idx for f in kept_faces for idx in f}
     patch = neutral_foot_mesh.submesh_from_vertices(kept_verts)
-    # Keep single largest component of patch
     comps = patch.connected_components()
     if comps:
         patch = patch.submesh_from_vertices(comps[0])
 
-    # Check trimline smoothness along patch boundary loops
     loops = patch.boundary_loops()
     if not loops:
         raise ValueError("AFO trimline patch produced no open boundary loop")
 
-    # Apply Laplacian smoothing passes to boundary loop vertices so malleolar trimline radius >= trimline_fillet_mm
     p_verts = list(patch.vertices)
     main_loop = max(loops, key=len)
     for _ in range(6):
@@ -524,27 +576,17 @@ def build_afo_shell(
     patch = TriMesh(vertices=p_verts, faces=patch.faces)
 
     min_r = compute_curve_min_radius([patch.vertices[i] for i in main_loop], closed=True)
-    # Enforce floor clamp if discrete mesh edge resolution lowers local radius
     effective_fillet = max(min_r, trimline_fillet_mm)
 
-    # Orient boundary loop to patch faces
-    p_half = {(a, b) for a, b, c in patch.faces} | {(b, c) for a, b, c in patch.faces} | {(c, a) for a, b, c in patch.faces}
-    ordered_loops: list[list[int]] = []
-    for lp in patch.boundary_loops():
-        if (lp[0], lp[1]) not in p_half:
-            lp = list(reversed(lp))
-        ordered_loops.append(lp)
-
+    ordered_loops = [_order_loop_matching_boundary(patch, lp) for lp in patch.boundary_loops()]
     p_norms = _smooth_normals(patch, iterations=3)
     verts = list(patch.vertices)
-    faces: list[Tri] = [(a, c, b) for a, b, c in patch.faces]  # S_in inward
+    faces: list[Tri] = [(a, c, b) for a, b, c in patch.faces]
 
     out_map: dict[int, int] = {}
     for i, v in enumerate(patch.vertices):
-        # Variable wall thickness: thick at ankle neck (z ~ joint_z_mm), thinner at calf
         neck_w = math.exp(-((v[2] - joint_z_mm) / 40.0) ** 2)
         thick = wall_calf_mm + (wall_neck_mm - wall_calf_mm) * neck_w
-        # Add coaxial joint pad build-up at medial/lateral ankle height
         if abs(v[2] - joint_z_mm) < 16.0 and abs(v[1] - joint_y_mm) < 18.0 and abs(v[0]) > 25.0:
             thick += 3.5 * math.exp(-((v[2] - joint_z_mm) / 10.0) ** 2)
         out_map[i] = len(verts)
@@ -556,7 +598,6 @@ def build_afo_shell(
     for lp in ordered_loops:
         in_ring = list(lp)
         out_ring = [out_map[i] for i in lp]
-        # 2-step rounded edge stitch
         mid_ring: list[int] = []
         for idx in lp:
             p_in = verts[idx]
@@ -575,7 +616,7 @@ def build_afo_shell(
     return ShellBuildResult(
         shell_mesh=shell,
         modifier_mesh=mod_mesh,
-        alignment_normal=(1.0, 0.0, 0.0),  # Coaxial ML joint axis orthogonal to +Y line of progression
+        alignment_normal=(1.0, 0.0, 0.0),
         trimline_min_radius_mm=effective_fillet,
         hardware_metrics={
             "hardware": "afo_coaxial_joint",
@@ -592,24 +633,13 @@ def export_carver_positive(
     mandrel_radius_mm: float = 12.7,
     bore_depth_mm: float = 95.0,
 ) -> CarverPositiveResult:
-    """Convert an open-cuff rectified positive into a watertight CNC foam-carver mold.
-
-    Adds:
-      - `collar_height_mm` proximal extension with `draft_angle_deg` (10-15 deg) release taper
-      - Top cap with recessed square-keyed `25.4 mm` mandrel bore (prevents spin under cutting/vacuum)
-      - 3-axis / 4-axis overhang & AFO cant diagnostic
-    """
-    pos = rectified_positive.copy()
+    """Convert any rectified positive (open or closed) into a watertight CNC foam-carver mold."""
+    pos, _ = repair_scan_mesh(rectified_positive, fill_holes=True, ensure_open_cuff=True)
     loops = pos.boundary_loops()
     if len(loops) != 1:
         raise ValueError(f"Carver prep expects 1 proximal cuff loop, found {len(loops)}")
 
-    cuff = loops[0]
-    pos_half = {(a, b) for a, b, c in pos.faces} | {(b, c) for a, b, c in pos.faces} | {(c, a) for a, b, c in pos.faces}
-    if (cuff[0], cuff[1]) not in pos_half:
-        cuff = list(reversed(cuff))
-
-    # Ensure cuff is ordered cleanly around proximal centroid
+    cuff = _order_loop_matching_boundary(pos, loops[0])
     cx = sum(pos.vertices[i][0] for i in cuff) / len(cuff)
     cy = sum(pos.vertices[i][1] for i in cuff) / len(cuff)
     z_top = max(pos.vertices[i][2] for i in cuff) + collar_height_mm
@@ -618,7 +648,6 @@ def export_carver_positive(
     verts = list(pos.vertices)
     faces = list(pos.faces)
 
-    # Tapered thermoforming draft collar (flares outward slightly proximally for clean sheet draw)
     collar_ring: list[int] = []
     for idx in cuff:
         vx, vy, vz = verts[idx]
@@ -629,17 +658,18 @@ def export_carver_positive(
         collar_ring.append(len(verts))
         verts.append((cx + dx * scale, cy + dy * scale, z_top))
 
-    # Note: on `pos`, boundary edge (cuff[k], cuff[k+1]) exists -> bridge needs (cuff[k+1], cuff[k])!
     _bridge_rings_manifold(collar_ring, cuff, faces, flip=False)
 
-    # Top cap with square-keyed mandrel bore centered at (cx, cy, z_top)
+    # Order bore angles uniformly around (cx, cy) matching cuff CW orientation
     m = len(collar_ring)
+    cuff_cw = _loop_signed_area_xy(verts, collar_ring) < 0.0
     bore_top_ring: list[int] = []
     bore_bot_ring: list[int] = []
+    # Find starting angle of collar_ring[0] so bore_top_ring aligns cleanly without twist
+    ang0 = math.atan2(verts[collar_ring[0]][1] - cy, verts[collar_ring[0]][0] - cx)
+    sign = -1.0 if cuff_cw else 1.0
     for k in range(m):
-        vx, vy, _ = verts[collar_ring[k]]
-        ang = math.atan2(vy - cy, vx - cx)
-        # Add 4 mm flat keyway slot along +X side to prevent mandrel rotation
+        ang = ang0 + sign * 2.0 * math.pi * k / m
         r_bore = mandrel_radius_mm
         if abs(math.sin(ang)) < 0.35 and math.cos(ang) > 0.0:
             r_bore += 4.0
@@ -650,7 +680,6 @@ def export_carver_positive(
         bore_bot_ring.append(len(verts))
         verts.append((bx, by, z_top - bore_depth_mm))
 
-    # Bridge collar_ring (outer) -> bore_top_ring (inner) -> bore_bot_ring -> bore_floor
     _bridge_rings_manifold(bore_top_ring, collar_ring, faces, flip=False)
     _bridge_rings_manifold(bore_bot_ring, bore_top_ring, faces, flip=False)
     bore_floor = len(verts)
@@ -661,7 +690,6 @@ def export_carver_positive(
 
     carver_mesh = TriMesh(vertices=verts, faces=faces)
 
-    # Undercut / swing diagnostic
     fnorms = carver_mesh.face_normals()
     max_overhang = 0.0
     for fn in fnorms:

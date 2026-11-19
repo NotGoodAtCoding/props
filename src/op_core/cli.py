@@ -12,7 +12,7 @@ from .mesh import read_stl, write_binary_stl
 from .recipe import OpRecipe, diff_recipes, mesh_sha256
 from .rectify import apply_recipe
 from .scan_qa import run_scan_qa
-from .shell import build_afo_shell, build_tt_socket_shell, export_carver_positive
+from .shell import build_afo_shell, build_tf_socket_shell, build_tt_socket_shell, export_carver_positive
 from .synthetic import generate_foot_ankle_mesh, generate_transtibial_limb
 from .ui_server import serve_ui
 
@@ -39,6 +39,14 @@ def _build_device(
             wall_neck_mm=float(recipe.shell.get("wall_distal_mm", 4.5)),
             wall_calf_mm=float(recipe.shell.get("wall_proximal_mm", 2.5)),
             trimline_fillet_mm=float(recipe.shell.get("trimline_fillet_mm", 10.0)),
+        )
+    elif recipe.device_type == "transfemoral_socket":
+        shell_res = build_tf_socket_shell(
+            rect.rectified_mesh,
+            wall_distal_mm=float(recipe.shell.get("wall_distal_mm", 5.5)),
+            wall_proximal_mm=float(recipe.shell.get("wall_proximal_mm", 3.0)),
+            flexion_deg=float(recipe.alignment.get("flexion_deg", 5.0)),
+            adduction_deg=float(recipe.alignment.get("adduction_deg", 8.0)),
         )
     else:
         shell_res = build_tt_socket_shell(

@@ -23,7 +23,7 @@ from .mesh import TriMesh, read_stl, write_binary_stl
 from .recipe import OpRecipe, mesh_sha256
 from .rectify import apply_recipe
 from .scan_qa import ScanQAReport, measure_circumferences, run_scan_qa
-from .shell import build_afo_shell, build_tt_socket_shell, export_carver_positive
+from .shell import build_afo_shell, build_tf_socket_shell, build_tt_socket_shell, export_carver_positive
 from .synthetic import generate_foot_ankle_mesh, generate_transtibial_limb
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -64,6 +64,24 @@ def _default_recipe_for_device(device: str, landmarks_xyz: dict[str, tuple[float
                 {"op": "landmark_relief", "id": "lat_mal", "landmark": "lateral_malleolus", "offset_mm": 4.0, "radius_mm": 22.0},
             ],
             shell={"wall_distal_mm": 4.5, "wall_proximal_mm": 2.5, "trimline_fillet_mm": 10.0, "hardware": "afo_coaxial_joint"},
+        )
+    if device == "tf":
+        return OpRecipe(
+            device_type="transfemoral_socket",
+            side="left",
+            liner_thickness_mm=3.0,
+            alignment={"flexion_deg": 5.0, "adduction_deg": 8.0, "mpt_offset_mm": [0.0, 0.0]},
+            landmarks={
+                "ischial_shelf": {"xyz": list(landmarks_xyz.get("popliteal", (0.0, -58.0, 10.0)))},
+                "scarpas_triangle": {"xyz": list(landmarks_xyz.get("mpt", (0.0, 56.0, -10.0)))},
+                "trochanter": {"xyz": list(landmarks_xyz.get("fibular_head", (58.0, 0.0, -15.0)))},
+            },
+            operations=[
+                {"op": "global_compression", "id": "glob", "z_range_mm": [-260.0, 60.0], "percent": -4.0, "transition_mm": 0.0},
+                {"op": "landmark_relief", "id": "scarpa", "landmark": "scarpas_triangle", "offset_mm": -5.0, "radius_mm": 28.0},
+                {"op": "landmark_relief", "id": "troch", "landmark": "trochanter", "offset_mm": 4.0, "radius_mm": 26.0},
+            ],
+            shell={"wall_distal_mm": 5.5, "wall_proximal_mm": 3.0, "trimline_fillet_mm": 12.0, "hardware": "pyramid_50_8_m6_captive"},
         )
     return OpRecipe(
         device_type="transtibial_socket",
@@ -242,8 +260,9 @@ _HTML_PAGE = r"""<!DOCTYPE html>
       <div class="card">
         <h2>Load Scan (.stl) or Sample</h2>
         <div class="row" style="margin-bottom:8px;">
-          <button class="btn" onclick="loadSample('tt')">Load Sample TT</button>
-          <button class="btn secondary" onclick="loadSample('afo')">Load Sample AFO</button>
+          <button class="btn" onclick="loadSample('tt')">Sample TT</button>
+          <button class="btn secondary" onclick="loadSample('tf')">Sample TF</button>
+          <button class="btn secondary" onclick="loadSample('afo')">Sample AFO</button>
         </div>
         <label class="field">
           <span class="lbl">Upload patient STL (mm)</span>
@@ -848,6 +867,14 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                         slices=measure_circumferences(aligned, anchor_z_mm=220.0, step_mm=20.0, max_depth_mm=140.0),
                     )
                     recipe = _default_recipe_for_device("afo", case.landmark_coords)
+                elif dev == "tf":
+                    case = generate_transtibial_limb(length_mm=240.0, proximal_radius=68.0, distal_radius=44.0, open_cuff=True, seed=7)
+                    aligned, qa_rep = run_scan_qa(
+                        case.mesh,
+                        mpt_point=case.landmark_coords["mpt"],
+                        distal_point=case.landmark_coords["distal_end"],
+                    )
+                    recipe = _default_recipe_for_device("tf", case.landmark_coords)
                 else:
                     case = generate_transtibial_limb(open_cuff=True, seed=0)
                     aligned, qa_rep = run_scan_qa(
@@ -965,6 +992,14 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                             wall_neck_mm=float(recipe.shell.get("wall_distal_mm", 4.5)),
                             wall_calf_mm=float(recipe.shell.get("wall_proximal_mm", 2.5)),
                             trimline_fillet_mm=float(recipe.shell.get("trimline_fillet_mm", 10.0)),
+                        )
+                    elif recipe.device_type == "transfemoral_socket":
+                        sh = build_tf_socket_shell(
+                            res.rectified_mesh,
+                            wall_distal_mm=float(recipe.shell.get("wall_distal_mm", 5.5)),
+                            wall_proximal_mm=float(recipe.shell.get("wall_proximal_mm", 3.0)),
+                            flexion_deg=float(recipe.alignment.get("flexion_deg", 5.0)),
+                            adduction_deg=float(recipe.alignment.get("adduction_deg", 8.0)),
                         )
                     else:
                         sh = build_tt_socket_shell(
