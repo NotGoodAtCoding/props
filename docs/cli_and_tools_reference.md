@@ -70,6 +70,13 @@ Prints a structured JSON diff between two `.oprecipe.json` files (e.g., check so
 PYTHONPATH=src python3 -m op_core.cli diff examples/tt_socket.oprecipe.json examples/tt_socket_v2.oprecipe.json
 ```
 
+### `op-core cam`
+Generates GRBL/LinuxCNC-compatible 4-axis rotary foam-carver G-code (`X`, `Z`, `A`) from `carver_positive.stl` and verifies ball-nose stock removal (`RMS <= 0.5 mm`, `0` gouges/collisions).
+
+```bash
+PYTHONPATH=src python3 -m op_core.cli cam ./demo_tt/carver_positive.stl --out-gcode ./demo_tt/carver.gcode --ball-radius-mm 4.0
+```
+
 ---
 
 ## 2. Experiment & Benchmark Runner (`scripts/run_experiments.py`)
@@ -104,8 +111,10 @@ PYTHONPATH=src python3 scripts/run_experiments.py --exp EXP-1
 | [`recipe.py`](../src/op_core/recipe.py) | `.oprecipe.json` v0.1 validation, landmark resolution, diffing | `OpRecipe`, `LandmarkRef`, `diff_recipes()`, `mesh_sha256()` |
 | [`rectify.py`](../src/op_core/rectify.py) | Non-destructive `M_0` geodesic rectification & AFO posture neutralization | `apply_recipe()`, `apply_afo_posture()`, `RectificationResult` |
 | [`shell.py`](../src/op_core/shell.py) | Variable shelling (TT, TF, AFO), bench alignment, hardware bosses, CNC carver molds | `build_tt_socket_shell()`, `build_tf_socket_shell()`, `build_afo_shell()`, `export_carver_positive()`, `has_manifold3d()` |
+| [`carver_cam.py`](../src/op_core/carver_cam.py) | 4-axis rotary foam-carver G-code generator & ball-nose stock simulator | `generate_4axis_gcode_and_simulate()`, `sample_cylindrical_heightmap()` |
 | [`export_3mf.py`](../src/op_core/export_3mf.py) | Slicer-targeted `.3mf` writer embedding reinforcement modifier meshes | `export_3mf()` (`target="orcaslicer"` or `"prusaslicer"`) |
-| [`linter.py`](../src/op_core/linter.py) | Pre-print structural safety checks & archival MDR/QMSR dossier export | `lint_device()`, `estimate_min_wall_thickness_mm()`, `export_fabrication_dossier()` |
+| [`linter.py`](../src/op_core/linter.py) | Pre-print structural safety checks & archival JSON/MD/PDF dossier export | `lint_device()`, `estimate_min_wall_thickness_mm()`, `export_fabrication_dossier()`, `export_fabrication_dossier_pdf()` |
+| [`src/op_fea/`](../src/op_fea/__init__.py) | Isolated CalculiX/Gmsh subprocess wrapper (`GPL` boundary outside MIT `op-core`) | `generate_iso10328_inp()`, `run_calculix_precheck()`, `parse_calculix_dat()` |
 | [`mesh.py`](../src/op_core/mesh.py) | Pure-Python triangle mesh, manifold audit, Dijkstra geodesics, STL I/O | `TriMesh`, `read_stl()`, `write_binary_stl()` |
 | [`math3d.py`](../src/op_core/math3d.py) | 3D vectors, Rodrigues rotation, 3×3 Jacobi PCA, 2D convex hull | `rodrigues_rotate()`, `jacobi_eigen_3x3()`, `convex_hull_2d()`, `smoothstep5()` |
 | [`synthetic.py`](../src/op_core/synthetic.py) | Procedural TT residual limbs, plantarflexed feet, and artifact injection | `generate_transtibial_limb()`, `generate_foot_ankle_mesh()`, `corrupt_scan()` |

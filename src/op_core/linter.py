@@ -115,6 +115,82 @@ def lint_device(
     )
 
 
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def export_fabrication_dossier_pdf(
+    recipe: OpRecipe,
+    qa_report: ScanQAReport,
+    lint_report: LintReport,
+    output_path: str | Path,
+) -> Path:
+    """Write a standalone pure-Python PDF 1.4 custom-device fabrication dossier (no external deps)."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    lines: list[tuple[str, int, str]] = [
+        ("F2", 14, f"Custom O&P Device Fabrication Dossier ({recipe.device_type})"),
+        ("F1", 9, f"Schema: v{recipe.schema_version} | Kernel: op-core {recipe.kernel_version} | Side: {recipe.side} | Units: {recipe.units}"),
+        ("F1", 9, f"Scan SHA-256: {(recipe.scan_sha256 or 'N/A')[:48]}"),
+        ("F2", 11, "1. Quality Assurance & Pre-Print Safety Gate"),
+        ("F1", 9, f"Scan QA Status: {qa_report.status} (Floaters={qa_report.floater_components_removed}, Tears={qa_report.internal_tear_loops}, DoubleWall={qa_report.double_wall_vertices})"),
+        ("F1", 9, f"Safety Lint: {'PASS' if lint_report.passed else 'FAIL'} | Watertight={lint_report.is_watertight_manifold} | MinWall={lint_report.min_estimated_wall_mm:.2f} mm | TrimR={lint_report.trimline_min_radius_mm:.1f} mm"),
+        ("F2", 11, "2. Landmark-Anchored Circumferences (20 mm increments)"),
+        ("F1", 9, "Depth (mm)      Taut Circumference (mm)      Cross-Section Area (mm^2)"),
+    ]
+    for sl in qa_report.slices[:10]:
+        lines.append((
+            "F1",
+            9,
+            f"  -{sl['depth_from_anchor_mm']:5.0f}            {sl['taut_circumference_mm']:8.1f}                    {sl['hull_area_mm2']:9.0f}",
+        ))
+    lines.append(("F2", 11, "3. Parametric Rectification Operations (.oprecipe.json)"))
+    lines.append(("F1", 9, f"Liner Offset: {recipe.liner_thickness_mm:.1f} mm | Alignment: {json.dumps(recipe.alignment)}"))
+    for op in recipe.operations[:10]:
+        lines.append(("F1", 8, f"  - {json.dumps(op)[:92]}"))
+    lines.extend([
+        ("F2", 11, "4. Regulatory Traceability (EU MDR Annex XIII / FDA QMSR)"),
+        ("F1", 9, "Patient Case ID: _______________   Prescriber NPI/ID: _______________"),
+        ("F1", 9, "Material Lot #:  _______________   Component Serial #: ______________"),
+    ])
+
+    stream_cmds = ["BT"]
+    y = 758
+    for font_key, size, txt in lines:
+        if y < 48:
+            break
+        stream_cmds.append(f"/{font_key} {size} Tf")
+        stream_cmds.append(f"1 0 0 1 44 {y} Tm ({_pdf_escape(txt)}) Tj")
+        y -= (size + 6)
+    stream_cmds.append("ET")
+    stream_bytes = ("\n".join(stream_cmds) + "\n").encode("latin-1", errors="replace")
+
+    objs: list[bytes] = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>\nendobj\n",
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\nendobj\n",
+        b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n",
+        f"6 0 obj\n<< /Length {len(stream_bytes)} >>\nstream\n".encode("ascii") + stream_bytes + b"endstream\nendobj\n",
+    ]
+
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets: list[int] = [0]
+    for obj in objs:
+        offsets.append(len(pdf))
+        pdf.extend(obj)
+    xref_start = len(pdf)
+    pdf.extend(f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode("ascii"))
+    for off in offsets[1:]:
+        pdf.extend(f"{off:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(
+        f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF\n".encode("ascii")
+    )
+    out.write_bytes(bytes(pdf))
+    return out
+
+
 def export_fabrication_dossier(
     recipe: OpRecipe,
     qa_report: ScanQAReport,
@@ -122,7 +198,7 @@ def export_fabrication_dossier(
     output_dir: str | Path,
     basename: str = "device_dossier",
 ) -> tuple[Path, Path]:
-    """Write archival JSON + Markdown custom-device fabrication dossier (MDR Annex XIII / QMSR trace)."""
+    """Write archival JSON, Markdown, and PDF custom-device fabrication dossier (MDR Annex XIII / QMSR trace)."""
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -166,4 +242,5 @@ def export_fabrication_dossier(
     ])
     md_path = out / f"{basename}.md"
     md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    export_fabrication_dossier_pdf(recipe, qa_report, lint_report, out / f"{basename}.pdf")
     return json_path, md_path

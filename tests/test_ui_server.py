@@ -59,6 +59,16 @@ class TestUIServer(unittest.TestCase):
             rect_data = json.loads(opener.open(req_rect).read().decode("utf-8"))
             self.assertEqual(len(rect_data["rectified"]["deltas"]), sample["mesh"]["vertex_count"])
 
+            sample["recipe"]["liner_thickness_mm"] = 4.0
+            req_diff = urllib.request.Request(
+                f"{base}/api/diff",
+                data=json.dumps({"session_id": sid, "recipe": sample["recipe"]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            diff_data = json.loads(opener.open(req_diff).read().decode("utf-8"))
+            self.assertIn("liner_thickness_mm", diff_data["diff"])
+
             req_build = urllib.request.Request(
                 f"{base}/api/build",
                 data=json.dumps({"session_id": sid, "recipe": sample["recipe"], "target": "orcaslicer"}).encode("utf-8"),
@@ -68,10 +78,15 @@ class TestUIServer(unittest.TestCase):
             build_data = json.loads(opener.open(req_build).read().decode("utf-8"))
             self.assertTrue(build_data["lint"]["passed"])
             self.assertIn("Slicer 3MF (device_orcaslicer.3mf)", build_data["downloads"])
+            self.assertIn("Dossier PDF (device_dossier.pdf)", build_data["downloads"])
 
             dl_url = base + build_data["downloads"]["Slicer 3MF (device_orcaslicer.3mf)"]
             blob = opener.open(dl_url).read()
             self.assertTrue(blob.startswith(b"PK"))  # Valid ZIP/.3mf archive
+
+            pdf_url = base + build_data["downloads"]["Dossier PDF (device_dossier.pdf)"]
+            pdf_blob = opener.open(pdf_url).read()
+            self.assertTrue(pdf_blob.startswith(b"%PDF-1.4"))
 
             # 3. Sample AFO session + build
             afo = json.loads(opener.open(f"{base}/api/sample?device=afo").read().decode("utf-8"))

@@ -16,11 +16,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .carver_cam import generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
 from .linter import export_fabrication_dossier, lint_device
 from .math3d import v_dot, v_sub
 from .mesh import TriMesh, read_stl, write_binary_stl
-from .recipe import OpRecipe, mesh_sha256
+from .recipe import OpRecipe, diff_recipes, mesh_sha256
 from .rectify import apply_recipe
 from .scan_qa import ScanQAReport, measure_circumferences, run_scan_qa
 from .shell import build_afo_shell, build_tf_socket_shell, build_tt_socket_shell, export_carver_positive
@@ -108,6 +109,7 @@ class _SessionRecord:
     def __init__(self, canonical_mesh: TriMesh, qa_report: ScanQAReport, recipe: OpRecipe) -> None:
         self.canonical_mesh = canonical_mesh
         self.qa_report = qa_report
+        self.baseline_recipe = OpRecipe.from_dict(recipe.to_dict())
         self.recipe = recipe
         self.tmp_dir = tempfile.TemporaryDirectory(prefix="op_ui_")
 
@@ -292,6 +294,10 @@ _HTML_PAGE = r"""<!DOCTYPE html>
           <button class="btn" onclick="runRectify()">Apply & Preview Heatmap</button>
         </div>
       </div>
+      <div class="card">
+        <h2>Revision Diff vs. Intake Baseline</h2>
+        <pre id="diffWrap" class="mono" style="margin:0; white-space:pre-wrap;">No parameter edits yet.</pre>
+      </div>
     </div>
 
     <div id="step-4" class="step-pane hidden">
@@ -321,6 +327,12 @@ _HTML_PAGE = r"""<!DOCTYPE html>
       <div class="hud-card row">
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" id="chkWire" onchange="drawScene()" /> Wireframe
+        </label>
+        <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
+          <input type="checkbox" id="chkLandmarks" checked onchange="drawScene()" /> Landmarks
+        </label>
+        <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
+          <input type="checkbox" id="chkSlices" checked onchange="drawScene()" /> 20mm Slices
         </label>
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" id="chkShell" checked onchange="toggleViewMesh()" /> Show Shell (if built)
@@ -462,6 +474,7 @@ function renderLandmarks() {
 function armLandmark(name) {
   state.armedLandmark = (state.armedLandmark === name) ? null : name;
   renderLandmarks();
+  drawScene();
 }
 
 function sliderField(id, label, min, max, step, val, unit, onChange) {
@@ -527,7 +540,19 @@ async function runRectify() {
   const data = await apiJson('/api/rectify', { session_id: state.sessionId, recipe: state.recipe });
   state.rectMesh = data.rectified;
   state.activeMeshKey = 'rect';
+  await refreshDiff();
   uploadMeshToGL();
+}
+
+async function refreshDiff() {
+  if (!state.sessionId || !state.recipe) return;
+  try {
+    const d = await apiJson('/api/diff', { session_id: state.sessionId, recipe: state.recipe });
+    const el = document.getElementById('diffWrap');
+    if (el) {
+      el.textContent = Object.keys(d.diff || {}).length ? JSON.stringify(d.diff, null, 2) : 'No parameter edits vs baseline.';
+    }
+  } catch (_) {}
 }
 
 async function runBuild() {
@@ -564,7 +589,8 @@ function renderDownloads() {
 const canvas = document.getElementById('glCanvas');
 const gl = canvas.getContext('webgl', { antialias: true });
 const extUint = gl ? gl.getExtension('OES_element_index_uint') : null;
-let prog = null, vboPos = null, vboNorm = null, vboCol = null, ibo = null, indexCount = 0;
+let prog = null, lineProg = null, vboPos = null, vboNorm = null, vboCol = null, ibo = null;
+let vboOvPos = null, vboOvCol = null, indexCount = 0;
 let indexType = gl ? gl.UNSIGNED_SHORT : 0;
 let lastMVP = null;
 
@@ -595,6 +621,16 @@ function initGL() {
       vec3 lit = vCol * (0.28 + 0.72 * diff);
       gl_FragColor = vec4(lit, 1.0);
     }`;
+  const lvs = `
+    attribute vec3 aPos;
+    attribute vec3 aCol;
+    uniform mat4 uMVP;
+    varying vec3 vCol;
+    void main() { vCol = aCol; gl_Position = uMVP * vec4(aPos, 1.0); }`;
+  const lfs = `
+    precision mediump float;
+    varying vec3 vCol;
+    void main() { gl_FragColor = vec4(vCol, 1.0); }`;
   function compile(type, src) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src);
@@ -605,10 +641,16 @@ function initGL() {
   gl.attachShader(prog, compile(gl.VERTEX_SHADER, vs));
   gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
   gl.linkProgram(prog);
+  lineProg = gl.createProgram();
+  gl.attachShader(lineProg, compile(gl.VERTEX_SHADER, lvs));
+  gl.attachShader(lineProg, compile(gl.FRAGMENT_SHADER, lfs));
+  gl.linkProgram(lineProg);
   vboPos = gl.createBuffer();
   vboNorm = gl.createBuffer();
   vboCol = gl.createBuffer();
   ibo = gl.createBuffer();
+  vboOvPos = gl.createBuffer();
+  vboOvCol = gl.createBuffer();
 }
 
 function deltaToColor(d) {
@@ -732,6 +774,59 @@ function drawScene() {
     gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), 1.0);
     gl.drawElements(gl.LINES, indexCount, indexType, 0);
   }
+  drawOverlays(camInfo.mvp);
+}
+
+function drawOverlays(mvp) {
+  if (!lineProg) return;
+  const pts = [], cols = [];
+  const m = getDisplayMesh();
+  if (document.getElementById('chkSlices').checked && state.qa && state.qa.slices && m) {
+    const cx = m.center[0], cy = m.center[1];
+    const r = Math.max(Math.abs(m.bounds.max[0]-m.bounds.min[0]), Math.abs(m.bounds.max[1]-m.bounds.min[1])) * 0.58;
+    const segs = 36;
+    for (const s of state.qa.slices) {
+      const z = s.z_mm;
+      for (let k = 0; k < segs; k++) {
+        const a0 = 2 * Math.PI * k / segs, a1 = 2 * Math.PI * (k + 1) / segs;
+        pts.push(cx + r*Math.cos(a0), cy + r*Math.sin(a0), z, cx + r*Math.cos(a1), cy + r*Math.sin(a1), z);
+        cols.push(0.22, 0.74, 0.97, 0.22, 0.74, 0.97);
+      }
+    }
+  }
+  if (document.getElementById('chkLandmarks').checked && state.recipe && state.recipe.landmarks) {
+    for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
+      const p = spec.xyz;
+      if (!p) continue;
+      const armed = state.armedLandmark === name;
+      const col = armed ? [0.13, 0.85, 0.45] : [0.98, 0.75, 0.15];
+      const s = armed ? 9.0 : 6.0;
+      const segs = [
+        [p[0]-s, p[1], p[2], p[0]+s, p[1], p[2]],
+        [p[0], p[1]-s, p[2], p[0], p[1]+s, p[2]],
+        [p[0], p[1], p[2]-s, p[0], p[1], p[2]+s],
+        [p[0]-s, p[1], p[2], p[0], p[1]+s, p[2]],
+        [p[0], p[1]+s, p[2], p[0]+s, p[1], p[2]],
+        [p[0]+s, p[1], p[2], p[0], p[1]-s, p[2]],
+        [p[0], p[1]-s, p[2], p[0]-s, p[1], p[2]]
+      ];
+      for (const sg of segs) { pts.push(...sg); cols.push(...col, ...col); }
+    }
+  }
+  if (!pts.length) return;
+  gl.useProgram(lineProg);
+  gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, 'uMVP'), false, mvp);
+  const lp = gl.getAttribLocation(lineProg, 'aPos');
+  gl.bindBuffer(gl.ARRAY_BUFFER, vboOvPos);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pts), gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(lp);
+  gl.vertexAttribPointer(lp, 3, gl.FLOAT, false, 0, 0);
+  const lc = gl.getAttribLocation(lineProg, 'aCol');
+  gl.bindBuffer(gl.ARRAY_BUFFER, vboOvCol);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cols), gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(lc);
+  gl.vertexAttribPointer(lc, 3, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.LINES, 0, pts.length / 3);
 }
 
 function pickSurfacePoint(clientX, clientY) {
@@ -785,6 +880,7 @@ window.addEventListener('mouseup', e => {
       state.recipe.landmarks[state.armedLandmark] = { xyz: pt.map(v => Number(v.toFixed(2))) };
       state.armedLandmark = null;
       renderLandmarks();
+      drawScene();
     }
   }
   dragging = false;
@@ -972,6 +1068,18 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                     self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
 
+            if self.path == "/api/diff":
+                rec = store.get(body.get("session_id", ""))
+                if rec is None:
+                    self._send_json({"error": "Unknown session_id"}, HTTPStatus.NOT_FOUND)
+                    return
+                try:
+                    cur = OpRecipe.from_dict(body["recipe"])
+                    self._send_json({"diff": diff_recipes(rec.baseline_recipe, cur)})
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+
             if self.path == "/api/build":
                 rec = store.get(body.get("session_id", ""))
                 if rec is None:
@@ -1022,13 +1130,19 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                     if recipe.device_type != "afo":
                         carver = export_carver_positive(res.rectified_mesh)
                         write_binary_stl(carver.positive_mesh, out / "carver_positive.stl")
+                        generate_4axis_gcode_and_simulate(
+                            carver.positive_mesh,
+                            output_path=out / "carver_4axis.gcode",
+                        )
                         downloads["Carver Positive STL"] = f"/api/download/{body['session_id']}/carver_positive.stl"
+                        downloads["Carver 4-Axis G-Code (.gcode)"] = f"/api/download/{body['session_id']}/carver_4axis.gcode"
 
                     lt = lint_device(
                         sh.shell_mesh,
                         measured_wall_override_mm=float(recipe.shell.get("wall_proximal_mm", 2.5)),
                     )
                     export_fabrication_dossier(recipe, rec.qa_report, lt, out)
+                    downloads["Dossier PDF (device_dossier.pdf)"] = f"/api/download/{body['session_id']}/device_dossier.pdf"
                     downloads["Dossier Markdown"] = f"/api/download/{body['session_id']}/device_dossier.md"
                     downloads["Dossier JSON"] = f"/api/download/{body['session_id']}/device_dossier.json"
 

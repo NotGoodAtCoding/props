@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .carver_cam import generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
 from .linter import export_fabrication_dossier, lint_device
 from .mesh import read_stl, write_binary_stl
@@ -103,6 +104,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  op-core build patient_scan.stl examples/tt_socket.oprecipe.json --out-dir ./out --target orcaslicer\n"
             "  op-core lint ./out/device_shell.stl --min-wall-mm 2.5\n"
             "  op-core diff v1.oprecipe.json v2.oprecipe.json\n"
+            "  op-core cam ./out/carver_positive.stl --out-gcode ./out/carver.gcode\n"
             "  op-core ui --port 8765\n\n"
             "Docs: see docs/getting_started.md and docs/cli_and_tools_reference.md"
         ),
@@ -197,6 +199,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_diff.add_argument("recipe_v1", help="Baseline .oprecipe.json path")
     p_diff.add_argument("recipe_v2", help="Updated .oprecipe.json path")
+
+    p_cam = sub.add_parser(
+        "cam",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="Generate 4-axis rotary foam-carver G-code and simulate ball-nose stock removal",
+        description="Emit GRBL/LinuxCNC 4-axis rotary G-code (X, Z, A) for a carver-positive STL and verify RMS surface fidelity.",
+        epilog="Example:\n  op-core cam ./out/carver_positive.stl --out-gcode ./out/carver.gcode --ball-radius-mm 6.0",
+    )
+    p_cam.add_argument("positive_stl", help="Path to carver_positive.stl (or rectified positive STL)")
+    p_cam.add_argument("--out-gcode", required=True, help="Output .gcode / .nc file path")
+    p_cam.add_argument("--ball-radius-mm", type=float, default=4.0, help="Ball-nose cutter radius in mm (default: 4.0)")
 
     p_ui = sub.add_parser(
         "ui",
@@ -335,6 +348,23 @@ def main(argv: list[str] | None = None) -> int:
         v2 = OpRecipe.load(args.recipe_v2)
         print(json.dumps(diff_recipes(v1, v2), indent=2))
         return 0
+
+    if args.cmd == "cam":
+        pos = read_stl(args.positive_stl)
+        cam_res = generate_4axis_gcode_and_simulate(
+            pos,
+            ball_radius_mm=args.ball_radius_mm,
+            output_path=args.out_gcode,
+        )
+        print(json.dumps({
+            "gcode_path": args.out_gcode,
+            "line_count": cam_res.line_count,
+            "rms_error_mm": round(cam_res.rms_error_mm, 4),
+            "max_gouge_mm": round(cam_res.max_gouge_mm, 4),
+            "mandrel_collisions": cam_res.mandrel_collisions,
+            "warnings": cam_res.warnings,
+        }, indent=2))
+        return 0 if cam_res.max_gouge_mm == 0.0 and cam_res.mandrel_collisions == 0 else 1
 
     if args.cmd == "ui":
         serve_ui(host=args.host, port=args.port, open_browser=not args.no_browser)
