@@ -1,7 +1,7 @@
 """Headless MIT computational geometry kernel for open-source O&P CAD/CAM."""
 
 from .export_3mf import export_3mf
-from .linter import LintReport, export_fabrication_dossier, lint_device
+from .linter import LintReport, export_fabrication_dossier, export_fabrication_dossier_pdf, lint_device
 from .mesh import TriMesh, read_stl, write_binary_stl
 from .recipe import OpRecipe, diff_recipes, mesh_sha256
 from .rectify import RectificationResult, apply_afo_posture, apply_recipe
@@ -44,6 +44,7 @@ __all__ = [
     "export_3mf",
     "export_carver_positive",
     "export_fabrication_dossier",
+    "export_fabrication_dossier_pdf",
     "fill_small_holes",
     "fix_consistent_winding",
     "has_manifold3d",

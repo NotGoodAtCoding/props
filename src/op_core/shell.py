@@ -532,21 +532,26 @@ def build_afo_shell(
     trimline_fillet_mm: float = 10.0,
     joint_y_mm: float = 0.0,
     joint_z_mm: float = 56.0,
+    calf_anterior_y_mm: float = 12.0,
+    footplate_z_mm: float = 24.0,
+    footplate_max_y_mm: float = 240.0,
+    joint_recess_radius_mm: float = 8.0,
+    joint_recess_depth_mm: float = 2.0,
 ) -> ShellBuildResult:
-    """Build a watertight posterior-leaf / solid AFO shell with malleolar fillets & coaxial joint bosses."""
+    """Build a watertight posterior-leaf / solid AFO shell with custom trimlines & coaxial joint pockets."""
     keep_face_mask: list[bool] = []
     for a, b, c in neutral_foot_mesh.faces:
         pts = [neutral_foot_mesh.vertices[idx] for idx in (a, b, c)]
         cy = sum(p[1] for p in pts) / 3.0
         cz = sum(p[2] for p in pts) / 3.0
         if cz > 75.0:
-            keep = cy < 12.0
+            keep = cy < calf_anterior_y_mm
         elif cz >= 38.0:
             t = (cz - 38.0) / 37.0
-            y_cut = 35.0 * (1.0 - smoothstep5(t)) + 12.0 * smoothstep5(t)
+            y_cut = 35.0 * (1.0 - smoothstep5(t)) + calf_anterior_y_mm * smoothstep5(t)
             keep = cy < y_cut
         else:
-            keep = cz < 24.0
+            keep = cz < footplate_z_mm and cy <= footplate_max_y_mm
         keep_face_mask.append(keep)
 
     kept_faces = [f for f, k in zip(neutral_foot_mesh.faces, keep_face_mask) if k]
@@ -587,8 +592,15 @@ def build_afo_shell(
     for i, v in enumerate(patch.vertices):
         neck_w = math.exp(-((v[2] - joint_z_mm) / 40.0) ** 2)
         thick = wall_calf_mm + (wall_neck_mm - wall_calf_mm) * neck_w
-        if abs(v[2] - joint_z_mm) < 16.0 and abs(v[1] - joint_y_mm) < 18.0 and abs(v[0]) > 25.0:
-            thick += 3.5 * math.exp(-((v[2] - joint_z_mm) / 10.0) ** 2)
+        # Stepped coaxial Tamarack/Becker joint boss + circular recess pocket on medial/lateral ankle faces
+        if abs(v[0]) > 22.0:
+            r_joint = math.hypot(v[1] - joint_y_mm, v[2] - joint_z_mm)
+            if r_joint < 16.0:
+                pad_w = 1.0 - smoothstep5(max(0.0, (r_joint - 9.0) / 7.0))
+                thick += 4.2 * pad_w
+                if r_joint < joint_recess_radius_mm:
+                    rec_w = 1.0 - smoothstep5(r_joint / max(1e-3, joint_recess_radius_mm))
+                    thick -= joint_recess_depth_mm * rec_w
         out_map[i] = len(verts)
         verts.append(v_add(v, v_scale(p_norms[i], thick)))
 

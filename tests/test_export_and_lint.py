@@ -60,7 +60,11 @@ class TestExportAndLint(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             recipe = OpRecipe(device_type="transtibial_socket", side="left")
             j_path, m_path = export_fabrication_dossier(recipe, qa, ok_lint, tmp)
-            self.assertTrue(j_path.exists() and m_path.exists())
+            p_path = Path(tmp) / "device_dossier.pdf"
+            self.assertTrue(j_path.exists() and m_path.exists() and p_path.exists())
+            pdf_bytes = p_path.read_bytes()
+            self.assertTrue(pdf_bytes.startswith(b"%PDF-1.4"))
+            self.assertIn(b"%%EOF", pdf_bytes)
             parsed = json.loads(j_path.read_text())
             self.assertEqual(parsed["scan_qa"]["status"], "PASS")
 
