@@ -1,5 +1,6 @@
 """Headless MIT computational geometry kernel for open-source O&P CAD/CAM."""
 
+from .carver_cam import CarverCamResult, generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
 from .linter import LintReport, export_fabrication_dossier, export_fabrication_dossier_pdf, lint_device
 from .mesh import TriMesh, read_stl, write_binary_stl
@@ -25,6 +26,7 @@ from .shell import (
 )
 
 __all__ = [
+    "CarverCamResult",
     "CarverPositiveResult",
     "LintReport",
     "OpRecipe",
@@ -47,6 +49,7 @@ __all__ = [
     "export_fabrication_dossier_pdf",
     "fill_small_holes",
     "fix_consistent_winding",
+    "generate_4axis_gcode_and_simulate",
     "has_manifold3d",
     "lint_device",
     "measure_circumferences",

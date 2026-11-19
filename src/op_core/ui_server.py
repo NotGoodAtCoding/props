@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .carver_cam import generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
 from .linter import export_fabrication_dossier, lint_device
 from .math3d import v_dot, v_sub
@@ -1129,7 +1130,12 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                     if recipe.device_type != "afo":
                         carver = export_carver_positive(res.rectified_mesh)
                         write_binary_stl(carver.positive_mesh, out / "carver_positive.stl")
+                        generate_4axis_gcode_and_simulate(
+                            carver.positive_mesh,
+                            output_path=out / "carver_4axis.gcode",
+                        )
                         downloads["Carver Positive STL"] = f"/api/download/{body['session_id']}/carver_positive.stl"
+                        downloads["Carver 4-Axis G-Code (.gcode)"] = f"/api/download/{body['session_id']}/carver_4axis.gcode"
 
                     lt = lint_device(
                         sh.shell_mesh,
