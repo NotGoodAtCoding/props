@@ -12,6 +12,8 @@ from .mesh import Tri, TriMesh
 
 @dataclass
 class SyntheticLimbCase:
+    """Procedural limb or foot-ankle test mesh paired with ground-truth landmark indices."""
+
     mesh: TriMesh
     landmarks: dict[str, int]
     landmark_coords: dict[str, Vec3]

@@ -12,6 +12,8 @@ from .recipe import OpRecipe
 
 @dataclass
 class RectificationResult:
+    """Outputs of applying an `.oprecipe.json` stack in reference domain M_0."""
+
     rectified_mesh: TriMesh
     base_compressed_mesh: TriMesh
     relief_field_mm: list[float]

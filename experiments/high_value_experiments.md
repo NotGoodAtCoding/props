@@ -1,5 +1,14 @@
+[Home (README)](../README.md) | [Getting Started](../docs/getting_started.md) | [CLI & Tools Reference](../docs/cli_and_tools_reference.md) | [`.oprecipe.json` Schema](../docs/oprecipe_schema.md) | [Action Plan](../o_p_technology_action_plan.md) | [Research](../research/practitioner_software_needs.md) | **Experiments**
+
+---
+
 # High-Value Validation Experiments for Open-Source O&P Software (v2 — Reviewer-Refined)
 
+> **Who this page is for:** Engineers and clinical evaluators verifying `op-core` accuracy, isolation, watertightness, and print/carver readiness.  
+> **Run implemented benchmarks (`EXP-1`–`EXP-5`) now:**
+> ```bash
+> PYTHONPATH=src python3 scripts/run_experiments.py
+> ```
 > **Purpose:** De-risk the highest-leverage technical and clinical-workflow assumptions in [`o_p_technology_action_plan.md`](../o_p_technology_action_plan.md) through fast, falsifiable experiments before investing in full UI or post-MVP integrations.
 
 ---

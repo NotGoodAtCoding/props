@@ -1,0 +1,80 @@
+{
+  "alignment": {
+    "adduction_deg": 5.0,
+    "flexion_deg": 5.0,
+    "mpt_offset_mm": [
+      0.0,
+      0.0
+    ]
+  },
+  "device_type": "transtibial_socket",
+  "kernel_version": "0.1.0",
+  "landmarks": {
+    "fibular_head": {
+      "xyz": [
+        52.0,
+        0.0,
+        -25.0
+      ]
+    },
+    "pt_bar": {
+      "xyz": [
+        0.0,
+        54.0,
+        0.0
+      ]
+    },
+    "tibial_crest": {
+      "xyz": [
+        0.0,
+        46.0,
+        -75.0
+      ]
+    }
+  },
+  "liner_thickness_mm": 3.0,
+  "operations": [
+    {
+      "id": "global_comp",
+      "op": "global_compression",
+      "percent": -3.0,
+      "transition_mm": 0.0,
+      "z_range_mm": [
+        -200.0,
+        50.0
+      ]
+    },
+    {
+      "id": "pt_indent",
+      "landmark": "pt_bar",
+      "offset_mm": -6.0,
+      "op": "landmark_relief",
+      "radius_mm": 20.0
+    },
+    {
+      "id": "fibular_relief",
+      "landmark": "fibular_head",
+      "offset_mm": 4.0,
+      "op": "landmark_relief",
+      "radius_mm": 24.0
+    },
+    {
+      "id": "crest_relief",
+      "landmark": "tibial_crest",
+      "offset_mm": 3.0,
+      "op": "landmark_relief",
+      "radius_mm": 22.0
+    }
+  ],
+  "scale_factor": 1.0,
+  "scan_sha256": "",
+  "schema_version": "0.1",
+  "shell": {
+    "hardware": "pyramid_50_8_m6_captive",
+    "trimline_fillet_mm": 10.0,
+    "wall_distal_mm": 4.5,
+    "wall_proximal_mm": 2.5
+  },
+  "side": "left",
+  "units": "mm"
+}

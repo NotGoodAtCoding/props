@@ -1,5 +1,11 @@
+[Home (README)](../README.md) | [Getting Started](../docs/getting_started.md) | [CLI & Tools Reference](../docs/cli_and_tools_reference.md) | [`.oprecipe.json` Schema](../docs/oprecipe_schema.md) | [Action Plan](../o_p_technology_action_plan.md) | **Research** | [Experiments](../experiments/high_value_experiments.md)
+
+---
+
 # Research Synthesis: Top-Priority Open-Source Software Needs in Prosthetics & Orthotics (O&P)
 
+> **Who this page is for:** Clinical stakeholders, O&P educators, and developers seeking the evidence behind why `op-core` prioritizes decoupled `.oprecipe.json` workflows, orthotics (AFO) parity, scan QA, and dual `.3mf`/carver outputs.  
+> **Looking to run the software?** See [Getting Started](../docs/getting_started.md).  
 > **Purpose:** Audit the assumptions in the initial [`o_p_technology_action_plan.md`](../o_p_technology_action_plan.md) against real-world clinical and fabrication workflows, existing open-source tooling, and regulatory/mechanical constraints faced by practicing Certified Prosthetist Orthotists (CPOs) and O&P technicians.
 
 ---

@@ -21,6 +21,8 @@ from .mesh import TriMesh
 
 @dataclass
 class ScanQAReport:
+    """Structured chairside scan quality assurance report and 20 mm girth slices."""
+
     status: str  # "PASS" | "WARN" | "FAIL"
     floater_components_removed: int
     proximal_cuff_loops: int

@@ -24,6 +24,8 @@ from .mesh import Tri, TriMesh
 
 @dataclass
 class ShellBuildResult:
+    """Compiled watertight socket or AFO shell, reinforcement modifier volume, and hardware metrics."""
+
     shell_mesh: TriMesh
     modifier_mesh: TriMesh
     alignment_normal: Vec3
@@ -33,6 +35,8 @@ class ShellBuildResult:
 
 @dataclass
 class CarverPositiveResult:
+    """Carver-ready positive foam mold with keyed mandrel bore, draft collar, and overhang diagnostics."""
+
     positive_mesh: TriMesh
     mandrel_axis: Vec3
     draft_angle_deg: float

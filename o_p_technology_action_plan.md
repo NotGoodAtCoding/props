@@ -1,5 +1,11 @@
+[Home (README)](./README.md) | [Getting Started](./docs/getting_started.md) | [CLI & Tools Reference](./docs/cli_and_tools_reference.md) | [`.oprecipe.json` Schema](./docs/oprecipe_schema.md) | **Action Plan** | [Research](./research/practitioner_software_needs.md) | [Experiments](./experiments/high_value_experiments.md)
+
+---
+
 # Open-Source Orthotics & Prosthetics (O&P) CAD/CAM Action Plan (v2.1 — Reviewer-Refined)
 
+> **Who this page is for:** Maintainers, contributors, and clinical partners reviewing the architecture, project priorities, licensing boundaries, and 16-week roadmap behind [`src/op_core/`](./src/op_core/__init__.py).  
+> **Looking to run the tools?** Start with [Getting Started](./docs/getting_started.md) or the [CLI & Tools Reference](./docs/cli_and_tools_reference.md).  
 > **Context:** Refined from initial v1/v2 drafts using practitioner research in [`research/practitioner_software_needs.md`](./research/practitioner_software_needs.md) and technical/clinical review. Validation protocols are defined in [`experiments/high_value_experiments.md`](./experiments/high_value_experiments.md).
 
 ## Executive Summary
