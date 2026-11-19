@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from op_core.carver_cam import generate_4axis_gcode_and_simulate
 from op_core.export_3mf import export_3mf
 from op_core.linter import lint_device
 from op_core.math3d import rodrigues_rotate, v_dist, v_dot, v_sub
@@ -185,19 +186,28 @@ def run_exp4_and_exp5() -> dict:
     ).passed
 
     carver_ok = 0
+    gcode_rms_max = 0.0
+    gcode_gouges = 0
     for seed in range(5):
         c = generate_transtibial_limb(open_cuff=True, seed=seed)
         carv = export_carver_positive(c.mesh, draft_angle_deg=12.0)
         if carv.positive_mesh.is_watertight_manifold() and carv.positive_mesh.signed_volume() > 0:
             carver_ok += 1
+        if seed < 2:
+            cam_res = generate_4axis_gcode_and_simulate(carv.positive_mesh, ball_radius_mm=4.0)
+            gcode_rms_max = max(gcode_rms_max, cam_res.rms_error_mm)
+            if cam_res.max_gouge_mm > 0.0 or cam_res.mandrel_collisions > 0:
+                gcode_gouges += 1
 
     dt = time.perf_counter() - t0
     return {
         "3mf_dual_schema": both_3mf,
         "linter_discriminates": lint_ok and lint_bad,
         "carver_watertight": f"{carver_ok}/5",
+        "exp5b_4axis_gcode_max_rms_mm": round(gcode_rms_max, 4),
+        "exp5b_gouges_or_collisions": gcode_gouges,
         "elapsed_s": round(dt, 3),
-        "pass": both_3mf and lint_ok and lint_bad and carver_ok == 5,
+        "pass": both_3mf and lint_ok and lint_bad and carver_ok == 5 and gcode_rms_max <= 0.5 and gcode_gouges == 0,
     }
 
 
