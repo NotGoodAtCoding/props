@@ -14,6 +14,7 @@ from .rectify import apply_recipe
 from .scan_qa import run_scan_qa
 from .shell import build_afo_shell, build_tt_socket_shell, export_carver_positive
 from .synthetic import generate_foot_ankle_mesh, generate_transtibial_limb
+from .ui_server import serve_ui
 
 
 def _build_device(
@@ -93,7 +94,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  op-core qa patient_scan.stl --out-stl aligned_scan.stl\n"
             "  op-core build patient_scan.stl examples/tt_socket.oprecipe.json --out-dir ./out --target orcaslicer\n"
             "  op-core lint ./out/device_shell.stl --min-wall-mm 2.5\n"
-            "  op-core diff v1.oprecipe.json v2.oprecipe.json\n\n"
+            "  op-core diff v1.oprecipe.json v2.oprecipe.json\n"
+            "  op-core ui --port 8765\n\n"
             "Docs: see docs/getting_started.md and docs/cli_and_tools_reference.md"
         ),
     )
@@ -187,6 +189,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_diff.add_argument("recipe_v1", help="Baseline .oprecipe.json path")
     p_diff.add_argument("recipe_v2", help="Updated .oprecipe.json path")
+
+    p_ui = sub.add_parser(
+        "ui",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="Launch the local 3D WebGL browser workstation (Phase 4 5-step clinical UI)",
+        description="Start a local offline-capable HTTP + WebGL 3D workstation for scan QA, landmark picking, rectification, and export.",
+        epilog="Example:\n  op-core ui --host 127.0.0.1 --port 8765 --no-browser",
+    )
+    p_ui.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
+    p_ui.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765)")
+    p_ui.add_argument("--no-browser", action="store_true", help="Do not automatically open a browser tab")
 
     return parser
 
@@ -313,6 +326,10 @@ def main(argv: list[str] | None = None) -> int:
         v1 = OpRecipe.load(args.recipe_v1)
         v2 = OpRecipe.load(args.recipe_v2)
         print(json.dumps(diff_recipes(v1, v2), indent=2))
+        return 0
+
+    if args.cmd == "ui":
+        serve_ui(host=args.host, port=args.port, open_browser=not args.no_browser)
         return 0
 
     return 0
