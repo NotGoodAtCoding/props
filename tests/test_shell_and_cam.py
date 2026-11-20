@@ -31,6 +31,18 @@ class TestShellAndCarver(unittest.TestCase):
         self.assertLess(ang_err, 0.2)
 
     def test_afo_shell_watertight_and_fillet_radius(self) -> None:
+        afo_neutral = generate_foot_ankle_mesh(plantarflexion_deg=0.0, inversion_deg=0.0).mesh
+        self.assertTrue(afo_neutral.is_watertight_manifold())
+        ach_y = min(v[1] for v in afo_neutral.vertices if 78.0 <= v[2] <= 90.0)
+        heel_y = min(v[1] for v in afo_neutral.vertices if 10.0 <= v[2] <= 35.0)
+        self.assertGreater(ach_y - heel_y, 10.0)  # Distinct calcaneal heel projection behind Achilles
+        med_arch_z = min(v[2] for v in afo_neutral.vertices if 70.0 <= v[1] <= 95.0 and v[0] < -15.0)
+        lat_sole_z = min(v[2] for v in afo_neutral.vertices if 70.0 <= v[1] <= 95.0 and v[0] > 15.0)
+        self.assertGreater(med_arch_z - lat_sole_z, 4.0)  # Raised medial longitudinal arch
+        hallux_y = max(v[1] for v in afo_neutral.vertices if v[0] < -12.0 and v[2] < 35.0)
+        toe5_y = max(v[1] for v in afo_neutral.vertices if v[0] > 20.0 and v[2] < 35.0)
+        self.assertGreater(hallux_y - toe5_y, 15.0)  # Asymmetric hallux-to-5th-toe sweep
+
         afo_case = generate_foot_ankle_mesh(plantarflexion_deg=12.0, inversion_deg=5.0)
         neutral = apply_afo_posture(afo_case.mesh, dorsiflexion_deg=12.0, eversion_deg=5.0, heel_pitch_mm=10.0)
         res = build_afo_shell(neutral, wall_neck_mm=4.5, wall_calf_mm=2.5, trimline_fillet_mm=10.0)

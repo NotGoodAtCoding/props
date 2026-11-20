@@ -97,17 +97,17 @@ def apply_afo_posture(
 
     # Plantar sole flattening at prescribed footwear heel-height pitch:
     # Heel sits at z_heel = heel_pitch_mm above forefoot contact plane z_fore = 0
-    z_vals = [v[2] for v in verts_rot if v[1] > -35.0]
+    z_vals = [v[2] for v in verts_rot if v[1] > -55.0]
     z_floor_ref = min(z_vals) if z_vals else 0.0
-    y_heel = -15.0
-    y_met = 125.0
+    y_heel = -22.0
+    y_met = 132.0
 
     verts_flat: list[Vec3] = []
     for x, y, z in verts_rot:
         t_y = max(0.0, min(1.0, (y - y_heel) / max(1.0, y_met - y_heel)))
         # Footwear sole plane drops linearly from heel_pitch_mm to 0 at met heads
         sole_target_z = z_floor_ref + heel_pitch_mm * (1.0 - t_y)
-        if z < sole_target_z + 2.5 and y > -40.0:
+        if z < sole_target_z + 2.5 and y > -55.0:
             # Smoothly project lowest plantar points onto sole plane without collapsing dorsal arch
             if z < sole_target_z:
                 z = sole_target_z
@@ -117,6 +117,86 @@ def apply_afo_posture(
         verts_flat.append((x, y, z))
 
     return TriMesh(vertices=verts_flat, faces=list(mesh.faces))
+
+
+def _accumulate_geodesic_kernel(
+    relief_mm: list[float],
+    dists: list[float],
+    offset: float,
+    radius: float,
+    falloff: str = "gaussian",
+) -> None:
+    """Add a smooth geodesic displacement kernel (Gaussian or flat plateau pad) into relief_mm."""
+    radius = max(1.0, radius)
+    if falloff == "flat_pad":
+        inner_r = 0.45 * radius
+        outer_r = max(inner_r + 1.0, radius)
+        for i, d in enumerate(dists):
+            if d <= inner_r:
+                relief_mm[i] += offset
+            elif d < outer_r:
+                t_pad = (d - inner_r) / (outer_r - inner_r)
+                relief_mm[i] += offset * (1.0 - smoothstep5(t_pad))
+    else:
+        sigma = radius * 0.48
+        inv_2s2 = 0.5 / (sigma * sigma)
+        cutoff = radius * 2.2
+        for i, d in enumerate(dists):
+            if d < cutoff:
+                relief_mm[i] += offset * math.exp(-d * d * inv_2s2)
+
+
+def taubin_smooth_mesh(
+    mesh: TriMesh,
+    iterations: int = 4,
+    strength: float = 0.5,
+    weights: list[float] | None = None,
+) -> TriMesh:
+    """Volume-preserving Taubin (lambda/mu) smoothing, optionally masked by per-vertex weights [0..1]."""
+    n = len(mesh.vertices)
+    if n == 0 or iterations <= 0 or strength <= 0.0:
+        return mesh.copy()
+
+    adj: list[set[int]] = [set() for _ in range(n)]
+    for a, b, c in mesh.faces:
+        adj[a].add(b)
+        adj[a].add(c)
+        adj[b].add(a)
+        adj[b].add(c)
+        adj[c].add(a)
+        adj[c].add(b)
+
+    # Pin open boundary loop vertices so open cuffs never shrink or curl
+    boundary_verts: set[int] = set()
+    for lp in mesh.boundary_loops():
+        boundary_verts.update(lp)
+
+    s = max(0.05, min(0.95, strength))
+    lam = 0.50 * s
+    mu = -0.53 * s
+    verts = list(mesh.vertices)
+    nbrs = [list(nb) for nb in adj]
+
+    for _ in range(iterations):
+        for factor in (lam, mu):
+            nxt: list[Vec3] = list(verts)
+            for i in range(n):
+                if i in boundary_verts or not nbrs[i]:
+                    continue
+                w = 1.0 if weights is None else weights[i]
+                if w <= 1e-6:
+                    continue
+                nb = nbrs[i]
+                inv_k = 1.0 / len(nb)
+                ax = sum(verts[j][0] for j in nb) * inv_k
+                ay = sum(verts[j][1] for j in nb) * inv_k
+                az = sum(verts[j][2] for j in nb) * inv_k
+                vx, vy, vz = verts[i]
+                fw = factor * w
+                nxt[i] = (vx + fw * (ax - vx), vy + fw * (ay - vy), vz + fw * (az - vz))
+            verts = nxt
+
+    return TriMesh(vertices=verts, faces=list(mesh.faces))
 
 
 def apply_recipe(canonical_mesh: TriMesh, recipe: OpRecipe) -> RectificationResult:
@@ -178,32 +258,80 @@ def apply_recipe(canonical_mesh: TriMesh, recipe: OpRecipe) -> RectificationResu
 
     base_mesh = TriMesh(vertices=base_verts, faces=list(m0.faces))
 
-    # Step B: Evaluate localized geodesic reliefs strictly in M_0 domain along fixed N_0
+    # Step B: Evaluate localized geodesic reliefs & additive/reductive sculpt strokes in M_0 domain along N_0
     relief_mm = [0.0] * n_verts
     geodesic_cache: dict[int, list[float]] = {}
     for op in recipe.operations:
-        if op["op"] == "landmark_relief":
-            lm_name = op["landmark"]
-            if lm_name not in resolved_landmarks:
+        kind = op["op"]
+        if kind == "landmark_relief":
+            lm_name = op.get("landmark", "")
+            if lm_name in resolved_landmarks:
+                seed_idx = resolved_landmarks[lm_name]
+            elif "xyz" in op:
+                xyz = tuple(float(c) for c in op["xyz"])
+                seed_idx = m0.nearest_vertex(xyz)  # type: ignore[arg-type]
+            else:
                 raise KeyError(f"Landmark {lm_name!r} not found in recipe landmarks")
-            seed_idx = resolved_landmarks[lm_name]
             if seed_idx not in geodesic_cache:
                 geodesic_cache[seed_idx] = m0.geodesic_distances([seed_idx])
-            dists = geodesic_cache[seed_idx]
-            offset = float(op["offset_mm"])
-            radius = max(1.0, float(op.get("radius_mm", 22.0)))
-            sigma = radius * 0.48
-            inv_2s2 = 0.5 / (sigma * sigma)
-            for i, d in enumerate(dists):
-                if d < radius * 2.2:
-                    relief_mm[i] += offset * math.exp(-d * d * inv_2s2)
+            _accumulate_geodesic_kernel(
+                relief_mm,
+                geodesic_cache[seed_idx],
+                offset=float(op["offset_mm"]),
+                radius=float(op.get("radius_mm", 22.0)),
+                falloff=str(op.get("falloff", "gaussian")),
+            )
+        elif kind == "sculpt_stroke":
+            pts = op.get("points") or ([] if "xyz" not in op else [op["xyz"]])
+            if not pts:
+                continue
+            seeds = sorted({
+                m0.nearest_vertex((float(p[0]), float(p[1]), float(p[2])))
+                for p in pts
+            })
+            dists = m0.geodesic_distances(seeds)
+            mode = str(op.get("mode", "")).lower()
+            raw_off = float(op.get("offset_mm", 3.0))
+            if mode == "add":
+                signed_off = abs(raw_off)
+            elif mode == "remove":
+                signed_off = -abs(raw_off)
+            else:
+                signed_off = raw_off
+            _accumulate_geodesic_kernel(
+                relief_mm,
+                dists,
+                offset=signed_off,
+                radius=float(op.get("radius_mm", 22.0)),
+                falloff=str(op.get("falloff", "gaussian")),
+            )
 
     final_verts = [
         v_add(base_verts[i], v_scale(n0[i], relief_mm[i]))
         for i in range(n_verts)
     ]
+    rectified = TriMesh(vertices=final_verts, faces=list(m0.faces))
+
+    # Step C: Apply optional global or localized volume-preserving Taubin smoothing operations
+    for op in recipe.operations:
+        if op["op"] == "smooth":
+            iters = max(1, min(20, int(op.get("iterations", 4))))
+            strength = float(op.get("strength", 0.5))
+            pts = op.get("points") or ([] if "xyz" not in op or op["xyz"] is None else [op["xyz"]])
+            if pts:
+                seeds = sorted({
+                    m0.nearest_vertex((float(p[0]), float(p[1]), float(p[2])))
+                    for p in pts
+                })
+                dists = m0.geodesic_distances(seeds)
+                rad = max(2.0, float(op.get("radius_mm", 30.0)))
+                weights = [1.0 - smoothstep5(d / rad) if d < rad else 0.0 for d in dists]
+                rectified = taubin_smooth_mesh(rectified, iterations=iters, strength=strength, weights=weights)
+            else:
+                rectified = taubin_smooth_mesh(rectified, iterations=iters, strength=strength, weights=None)
+
     return RectificationResult(
-        rectified_mesh=TriMesh(vertices=final_verts, faces=list(m0.faces)),
+        rectified_mesh=rectified,
         base_compressed_mesh=base_mesh,
         relief_field_mm=relief_mm,
         resolved_landmarks=resolved_landmarks,

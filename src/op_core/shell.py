@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import math
 from dataclasses import dataclass, field
+from typing import Any
 
 from .math3d import (
     Vec3,
@@ -20,7 +21,7 @@ from .math3d import (
     v_unit,
 )
 from .mesh import Tri, TriMesh
-from .repair import clip_mesh_z, repair_scan_mesh
+from .repair import clip_mesh_scalar, clip_mesh_z, repair_scan_mesh
 
 
 def has_manifold3d() -> bool:
@@ -301,6 +302,143 @@ def _build_captive_m6_pyramid_boss_cap(
     return verts, faces, top_ring_idx
 
 
+TRIMLINE_PRESETS: dict[str, dict[str, float]] = {
+    "ptb": {"anterior_z_mm": 30.0, "posterior_z_mm": 0.0, "medial_z_mm": 24.0, "lateral_z_mm": 24.0},
+    "ptb_sc": {"anterior_z_mm": 28.0, "posterior_z_mm": -2.0, "medial_z_mm": 48.0, "lateral_z_mm": 46.0},
+    "ptb_scsp": {"anterior_z_mm": 56.0, "posterior_z_mm": -2.0, "medial_z_mm": 50.0, "lateral_z_mm": 48.0},
+    "tf_ischial": {"anterior_z_mm": 32.0, "posterior_z_mm": 18.0, "medial_z_mm": 10.0, "lateral_z_mm": 50.0},
+    "flat": {"anterior_z_mm": 38.0, "posterior_z_mm": 38.0, "medial_z_mm": 38.0, "lateral_z_mm": 38.0},
+}
+
+
+def _shaft_center_xy(mesh: TriMesh) -> tuple[float, float]:
+    """Compute stable mid-shaft XY centerline for angular trimline evaluation."""
+    if not mesh.vertices:
+        return (0.0, 0.0)
+    bmin, bmax = mesh.bounds()
+    zspan = max(1e-6, bmax[2] - bmin[2])
+    z_lo = bmin[2] + 0.25 * zspan
+    z_hi = bmin[2] + 0.75 * zspan
+    mid = [v for v in mesh.vertices if z_lo <= v[2] <= z_hi]
+    pts = mid if len(mid) >= 12 else mesh.vertices
+    return (
+        sum(v[0] for v in pts) / len(pts),
+        sum(v[1] for v in pts) / len(pts),
+    )
+
+
+def evaluate_trimline_z(
+    theta: float,
+    trimline: dict[str, Any],
+    center_xy: tuple[float, float] = (0.0, 0.0),
+    default_z: float = 38.0,
+) -> float:
+    """Evaluate contoured socket trimline height Z(theta) around the limb circumference.
+
+    theta = atan2(y - cy, x - cx): +pi/2 = Anterior (+Y), -pi/2 = Posterior (-Y),
+    0 = Lateral (+X), +-pi = Medial (-X).
+    """
+    pts = trimline.get("points") or []
+    if len(pts) >= 3:
+        cx, cy = center_xy
+        knots = sorted(
+            (math.atan2(float(p[1]) - cy, float(p[0]) - cx), float(p[2]))
+            for p in pts
+        )
+        # Merge near-duplicate angles cleanly
+        dedup: list[tuple[float, float]] = []
+        for ang, zv in knots:
+            if dedup and abs(ang - dedup[-1][0]) < 1e-3:
+                dedup[-1] = (0.5 * (dedup[-1][0] + ang), 0.5 * (dedup[-1][1] + zv))
+            else:
+                dedup.append((ang, zv))
+        if len(dedup) >= 3:
+            ext = (
+                [(dedup[-1][0] - 2.0 * math.pi, dedup[-1][1])]
+                + dedup
+                + [(dedup[0][0] + 2.0 * math.pi, dedup[0][1])]
+            )
+            th = math.atan2(math.sin(theta), math.cos(theta))
+            for k in range(len(ext) - 1):
+                a0, z0 = ext[k]
+                a1, z1 = ext[k + 1]
+                if a0 <= th <= a1:
+                    t = (th - a0) / max(1e-9, a1 - a0)
+                    w = smoothstep5(t)
+                    return z0 * (1.0 - w) + z1 * w
+
+    preset_name = str(trimline.get("preset", ""))
+    base = TRIMLINE_PRESETS.get(preset_name, {})
+    z_ant = float(trimline.get("anterior_z_mm", base.get("anterior_z_mm", default_z)))
+    z_post = float(trimline.get("posterior_z_mm", base.get("posterior_z_mm", default_z)))
+    z_med = float(trimline.get("medial_z_mm", base.get("medial_z_mm", default_z)))
+    z_lat = float(trimline.get("lateral_z_mm", base.get("lateral_z_mm", default_z)))
+
+    ct = math.cos(theta)
+    st = math.sin(theta)
+    w_ant = max(0.0, st) ** 2
+    w_post = max(0.0, -st) ** 2
+    w_lat = max(0.0, ct) ** 2
+    w_med = max(0.0, -ct) ** 2
+    return z_ant * w_ant + z_post * w_post + z_lat * w_lat + z_med * w_med
+
+
+def _clip_to_socket_trimline(
+    mesh: TriMesh,
+    proximal_trim_z_mm: float | None,
+    trimline: dict[str, Any] | None = None,
+) -> TriMesh:
+    """Clip a limb mesh cleanly along a contoured 3D socket trimline or planar brim height."""
+    if trimline:
+        cx, cy = _shaft_center_xy(mesh)
+        bmin, bmax = mesh.bounds()
+        is_closed = len(mesh.boundary_loops()) == 0
+        default_z = proximal_trim_z_mm if proximal_trim_z_mm is not None else 38.0
+        max_cut_z = bmax[2] - 4.0 if is_closed else bmax[2] + 100.0
+        min_cut_z = bmin[2] + 35.0
+        values: list[float] = []
+        will_cut = False
+        for x, y, z in mesh.vertices:
+            th = math.atan2(y - cy, x - cx)
+            zt = evaluate_trimline_z(th, trimline, center_xy=(cx, cy), default_z=default_z)
+            zt = max(min_cut_z, min(max_cut_z, zt))
+            val = zt - z
+            if val < 0.0:
+                will_cut = True
+            values.append(val)
+        if not will_cut:
+            return mesh
+        clipped = clip_mesh_scalar(mesh, values=values, threshold=0.0, keep_above=True)
+        comps = clipped.connected_components()
+        if len(comps) > 1:
+            clipped = clipped.submesh_from_vertices(comps[0])
+        # Gently smooth boundary cuff loop vertices so oblique triangle clips form a clean brim
+        loops = clipped.boundary_loops()
+        if len(loops) == 1 and len(loops[0]) >= 6:
+            c_verts = list(clipped.vertices)
+            lp = _order_loop_matching_boundary(clipped, loops[0])
+            m = len(lp)
+            for _ in range(2):
+                upd: dict[int, Vec3] = {}
+                for k in range(m):
+                    p0 = c_verts[lp[(k - 1) % m]]
+                    p1 = c_verts[lp[k]]
+                    p2 = c_verts[lp[(k + 1) % m]]
+                    avg = v_scale(v_add(p0, p2), 0.5)
+                    upd[lp[k]] = v_add(v_scale(p1, 0.72), v_scale(avg, 0.28))
+                for idx, pt in upd.items():
+                    c_verts[idx] = pt
+            clipped = TriMesh(vertices=c_verts, faces=clipped.faces)
+        return clipped
+
+    if proximal_trim_z_mm is None:
+        return mesh
+    _, bmax = mesh.bounds()
+    if bmax[2] <= proximal_trim_z_mm + 5.0:
+        return mesh
+    return clip_mesh_z(mesh, z_cut=proximal_trim_z_mm, keep_above=False)
+
+
 def _build_socket_shell_core(
     rectified_positive: TriMesh,
     wall_distal_mm: float,
@@ -310,9 +448,12 @@ def _build_socket_shell_core(
     brim_round_segments: int,
     hardware_tag: str,
     alignment_type: str,
+    proximal_trim_z_mm: float | None = None,
+    trimline: dict[str, Any] | None = None,
 ) -> ShellBuildResult:
-    """Arbitrary-mesh socket shell builder using planar distal clipping + unequal-ring manifold bridging."""
-    pos, _ = repair_scan_mesh(rectified_positive, fill_holes=True, ensure_open_cuff=True)
+    """Arbitrary-mesh socket shell builder using contoured trimline + distal clipping + manifold bridging."""
+    trimmed = _clip_to_socket_trimline(rectified_positive, proximal_trim_z_mm, trimline=trimline)
+    pos, _ = repair_scan_mesh(trimmed, fill_holes=True, ensure_open_cuff=True)
     loops = pos.boundary_loops()
     if len(loops) != 1:
         raise ValueError(f"Expected 1 proximal cuff loop after repair, found {len(loops)}")
@@ -442,8 +583,10 @@ def build_tt_socket_shell(
     flexion_deg: float = 5.0,
     adduction_deg: float = 5.0,
     brim_round_segments: int = 3,
+    proximal_trim_z_mm: float | None = None,
+    trimline: dict[str, Any] | None = None,
 ) -> ShellBuildResult:
-    """Build a watertight TT socket shell with rounded brim and MPT-aligned captive-M6 pyramid boss."""
+    """Build a watertight TT socket shell with contoured trimline, rounded brim, and pyramid boss."""
     return _build_socket_shell_core(
         rectified_positive=rectified_positive,
         wall_distal_mm=wall_distal_mm,
@@ -453,6 +596,8 @@ def build_tt_socket_shell(
         brim_round_segments=brim_round_segments,
         hardware_tag="pyramid_50_8_m6_captive",
         alignment_type="tt_mpt_bisection_plumb_line",
+        proximal_trim_z_mm=proximal_trim_z_mm,
+        trimline=trimline,
     )
 
 
@@ -463,8 +608,10 @@ def build_tf_socket_shell(
     flexion_deg: float = 5.0,
     adduction_deg: float = 8.0,
     brim_round_segments: int = 3,
+    proximal_trim_z_mm: float | None = None,
+    trimline: dict[str, Any] | None = None,
 ) -> ShellBuildResult:
-    """Build a watertight transfemoral (TF) socket shell with TKA-aligned captive-M6 pyramid boss."""
+    """Build a watertight transfemoral (TF) socket shell with contoured trimline and TKA pyramid boss."""
     return _build_socket_shell_core(
         rectified_positive=rectified_positive,
         wall_distal_mm=wall_distal_mm,
@@ -474,6 +621,8 @@ def build_tf_socket_shell(
         brim_round_segments=brim_round_segments,
         hardware_tag="pyramid_50_8_m6_captive",
         alignment_type="tf_tka_plumb_line",
+        proximal_trim_z_mm=proximal_trim_z_mm,
+        trimline=trimline,
     )
 
 
@@ -644,9 +793,12 @@ def export_carver_positive(
     collar_height_mm: float = 40.0,
     mandrel_radius_mm: float = 12.7,
     bore_depth_mm: float = 95.0,
+    proximal_trim_z_mm: float | None = None,
+    trimline: dict[str, Any] | None = None,
 ) -> CarverPositiveResult:
     """Convert any rectified positive (open or closed) into a watertight CNC foam-carver mold."""
-    pos, _ = repair_scan_mesh(rectified_positive, fill_holes=True, ensure_open_cuff=True)
+    trimmed = _clip_to_socket_trimline(rectified_positive, proximal_trim_z_mm, trimline=trimline)
+    pos, _ = repair_scan_mesh(trimmed, fill_holes=True, ensure_open_cuff=True)
     loops = pos.boundary_loops()
     if len(loops) != 1:
         raise ValueError(f"Carver prep expects 1 proximal cuff loop, found {len(loops)}")

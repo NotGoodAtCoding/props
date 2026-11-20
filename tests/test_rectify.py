@@ -70,6 +70,64 @@ class TestRectify(unittest.TestCase):
         self.assertTrue(forefoot_z)
         self.assertGreater(min(forefoot_z), -20.0)
 
+    def test_additive_reductive_sculpt_strokes_and_taubin_smoothing(self) -> None:
+        case = generate_transtibial_limb(open_cuff=False, include_knee_thigh=True, seed=3)
+        n0 = case.mesh.vertex_normals()
+        pt_add = case.landmark_coords["tibial_crest"]
+        pt_rem = case.landmark_coords["popliteal"]
+
+        recipe = OpRecipe(
+            device_type="transtibial_socket",
+            operations=[
+                {
+                    "op": "sculpt_stroke",
+                    "id": "add_crest",
+                    "mode": "add",
+                    "points": [list(pt_add), [pt_add[0], pt_add[1], pt_add[2] - 25.0]],
+                    "offset_mm": 5.0,
+                    "radius_mm": 22.0,
+                    "falloff": "gaussian",
+                },
+                {
+                    "op": "sculpt_stroke",
+                    "id": "carve_pop",
+                    "mode": "remove",
+                    "points": [list(pt_rem)],
+                    "offset_mm": 4.5,
+                    "radius_mm": 24.0,
+                    "falloff": "flat_pad",
+                },
+            ],
+        )
+        res_raw = apply_recipe(case.mesh, recipe)
+        idx_add = case.landmarks["tibial_crest"]
+        idx_rem = case.landmarks["popliteal"]
+        d_add = v_dot(v_sub(res_raw.rectified_mesh.vertices[idx_add], case.mesh.vertices[idx_add]), n0[idx_add])
+        d_rem = v_dot(v_sub(res_raw.rectified_mesh.vertices[idx_rem], case.mesh.vertices[idx_rem]), n0[idx_rem])
+        self.assertGreater(d_add, 4.0)
+        self.assertLess(d_rem, -3.5)
+
+        # Localized + global Taubin smoothing reduces peak sharpness while preserving overall volume within 1%
+        recipe.operations.append({
+            "op": "smooth",
+            "id": "smooth_local",
+            "points": [list(pt_add)],
+            "radius_mm": 30.0,
+            "iterations": 4,
+            "strength": 0.6,
+        })
+        recipe.operations.append({
+            "op": "smooth",
+            "id": "smooth_global",
+            "iterations": 4,
+            "strength": 0.5,
+        })
+        res_sm = apply_recipe(case.mesh, recipe)
+        self.assertTrue(res_sm.rectified_mesh.is_watertight_manifold())
+        vol_raw = res_raw.rectified_mesh.signed_volume()
+        vol_sm = res_sm.rectified_mesh.signed_volume()
+        self.assertLess(abs(vol_sm - vol_raw) / max(1.0, vol_raw), 0.01)
+
 
 if __name__ == "__main__":
     unittest.main()

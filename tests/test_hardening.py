@@ -87,10 +87,64 @@ class TestHardening(unittest.TestCase):
             import json
             resp = json.loads(opener.open(f"http://127.0.0.1:{port}/api/sample?device=tf").read().decode("utf-8"))
             self.assertEqual(resp["recipe"]["device_type"], "transfemoral_socket")
+            self.assertEqual(resp["qa"]["status"], "PASS")
+            self.assertGreater(resp["mesh"]["bounds"]["max"][2], 80.0)
         finally:
             server.shutdown()
             server.server_close()
             store.close_all()
+
+    def test_full_closed_limb_scans_trim_cleanly_to_socket_shells(self) -> None:
+        from op_core.scan_qa import run_scan_qa
+        from op_core.synthetic import generate_transfemoral_limb
+
+        tt_full = generate_transtibial_limb(open_cuff=False, include_knee_thigh=True, seed=0)
+        self.assertTrue(tt_full.mesh.is_watertight_manifold())
+        self.assertGreater(tt_full.mesh.bounds()[1][2], 100.0)
+        pat_y = max(v[1] for v in tt_full.mesh.vertices if 28.0 <= v[2] <= 38.0 and abs(v[0]) < 8.0)
+        pat_side_y = max(v[1] for v in tt_full.mesh.vertices if 28.0 <= v[2] <= 38.0 and 14.0 <= abs(v[0]) <= 22.0)
+        supra_y = max(v[1] for v in tt_full.mesh.vertices if 56.0 <= v[2] <= 63.0 and abs(v[0]) < 8.0)
+        mpt_y = max(v[1] for v in tt_full.mesh.vertices if -2.0 <= v[2] <= 6.0 and abs(v[0]) < 8.0)
+        self.assertGreater(pat_y - supra_y, 5.0)    # Clear patella contour below suprapatellar dip
+        self.assertGreater(pat_y - mpt_y, 3.5)      # Clear patellar tendon shelf below patella apex
+        self.assertLess(pat_y - pat_side_y, 4.0)    # Broad, realistically flat anterior patellar face
+        aligned_tt, qa_tt = run_scan_qa(
+            tt_full.mesh,
+            mpt_point=tt_full.landmark_coords["mpt"],
+            distal_point=tt_full.landmark_coords["distal_end"],
+        )
+        self.assertEqual(qa_tt.status, "PASS", qa_tt.errors)
+        tt_sh = build_tt_socket_shell(aligned_tt, proximal_trim_z_mm=38.0)
+        self.assertTrue(tt_sh.shell_mesh.is_watertight_manifold(), tt_sh.shell_mesh.edge_topology())
+        self.assertLessEqual(tt_sh.shell_mesh.bounds()[1][2], 45.0)
+
+        tf_full = generate_transfemoral_limb(open_cuff=False, seed=7)
+        self.assertTrue(tf_full.mesh.is_watertight_manifold())
+        aligned_tf, qa_tf = run_scan_qa(
+            tf_full.mesh,
+            mpt_point=tf_full.landmark_coords["mpt"],
+            distal_point=tf_full.landmark_coords["distal_end"],
+        )
+        self.assertEqual(qa_tf.status, "PASS", qa_tf.errors)
+        tf_sh = build_tf_socket_shell(aligned_tf, proximal_trim_z_mm=45.0)
+        self.assertTrue(tf_sh.shell_mesh.is_watertight_manifold(), tf_sh.shell_mesh.edge_topology())
+        self.assertLessEqual(tf_sh.shell_mesh.bounds()[1][2], 52.0)
+
+        # Contoured PTB-SC & custom clicked 3D trimlines build watertight shells + carver positives
+        from op_core.shell import TRIMLINE_PRESETS
+        sc_tl = dict(TRIMLINE_PRESETS["ptb_sc"], preset="ptb_sc")
+        sc_sh = build_tt_socket_shell(aligned_tt, trimline=sc_tl)
+        self.assertTrue(sc_sh.shell_mesh.is_watertight_manifold(), sc_sh.shell_mesh.edge_topology())
+        self.assertGreater(sc_sh.shell_mesh.bounds()[1][2], 44.0)
+        sc_carver = export_carver_positive(aligned_tt, trimline=sc_tl)
+        self.assertTrue(sc_carver.positive_mesh.is_watertight_manifold(), sc_carver.positive_mesh.edge_topology())
+
+        custom_tl = {
+            "preset": "custom",
+            "points": [[0.0, 0.0, 34.0], [50.0, -54.0, 50.0], [0.0, -108.0, -2.0], [-50.0, -54.0, 48.0]],
+        }
+        cust_sh = build_tt_socket_shell(aligned_tt, trimline=custom_tl)
+        self.assertTrue(cust_sh.shell_mesh.is_watertight_manifold(), cust_sh.shell_mesh.edge_topology())
 
     def test_fetch_openlimb_normalizer_scales_fractional_mesh(self) -> None:
         from scripts.fetch_openlimb import normalize_openlimb_stl

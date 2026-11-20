@@ -25,7 +25,7 @@ from .recipe import OpRecipe, diff_recipes, mesh_sha256
 from .rectify import apply_recipe
 from .scan_qa import ScanQAReport, measure_circumferences, run_scan_qa
 from .shell import build_afo_shell, build_tf_socket_shell, build_tt_socket_shell, export_carver_positive
-from .synthetic import generate_foot_ankle_mesh, generate_transtibial_limb
+from .synthetic import generate_foot_ankle_mesh, generate_transfemoral_limb, generate_transtibial_limb
 
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
@@ -73,16 +73,30 @@ def _default_recipe_for_device(device: str, landmarks_xyz: dict[str, tuple[float
             liner_thickness_mm=3.0,
             alignment={"flexion_deg": 5.0, "adduction_deg": 8.0, "mpt_offset_mm": [0.0, 0.0]},
             landmarks={
-                "ischial_shelf": {"xyz": list(landmarks_xyz.get("popliteal", (0.0, -58.0, 10.0)))},
-                "scarpas_triangle": {"xyz": list(landmarks_xyz.get("mpt", (0.0, 56.0, -10.0)))},
-                "trochanter": {"xyz": list(landmarks_xyz.get("fibular_head", (58.0, 0.0, -15.0)))},
+                "ischial_shelf": {"xyz": list(landmarks_xyz.get("ischial_shelf", landmarks_xyz.get("popliteal", (0.0, -58.0, 10.0))))},
+                "scarpas_triangle": {"xyz": list(landmarks_xyz.get("scarpas_triangle", landmarks_xyz.get("mpt", (0.0, 56.0, -10.0))))},
+                "trochanter": {"xyz": list(landmarks_xyz.get("trochanter", landmarks_xyz.get("fibular_head", (58.0, 0.0, -15.0))))},
             },
             operations=[
-                {"op": "global_compression", "id": "glob", "z_range_mm": [-260.0, 60.0], "percent": -4.0, "transition_mm": 0.0},
+                {"op": "global_compression", "id": "glob", "z_range_mm": [-260.0, 48.0], "percent": -4.0, "transition_mm": 18.0},
                 {"op": "landmark_relief", "id": "scarpa", "landmark": "scarpas_triangle", "offset_mm": -5.0, "radius_mm": 28.0},
                 {"op": "landmark_relief", "id": "troch", "landmark": "trochanter", "offset_mm": 4.0, "radius_mm": 26.0},
             ],
-            shell={"wall_distal_mm": 5.5, "wall_proximal_mm": 3.0, "trimline_fillet_mm": 12.0, "hardware": "pyramid_50_8_m6_captive"},
+            shell={
+                "wall_distal_mm": 5.5,
+                "wall_proximal_mm": 3.0,
+                "trimline_fillet_mm": 12.0,
+                "proximal_trim_z_mm": 45.0,
+                "trimline": {
+                    "preset": "tf_ischial",
+                    "anterior_z_mm": 32.0,
+                    "posterior_z_mm": 18.0,
+                    "medial_z_mm": 10.0,
+                    "lateral_z_mm": 50.0,
+                    "points": [],
+                },
+                "hardware": "pyramid_50_8_m6_captive",
+            },
         )
     return OpRecipe(
         device_type="transtibial_socket",
@@ -95,13 +109,28 @@ def _default_recipe_for_device(device: str, landmarks_xyz: dict[str, tuple[float
             "popliteal": {"xyz": list(landmarks_xyz.get("popliteal", (0.0, -54.0, -5.0)))},
         },
         operations=[
-            {"op": "global_compression", "id": "glob", "z_range_mm": [-220.0, 60.0], "percent": -3.0, "transition_mm": 0.0},
+            {"op": "global_compression", "id": "glob", "z_range_mm": [-220.0, 42.0], "percent": -3.0, "transition_mm": 20.0},
             {"op": "zoned_compression", "id": "distal_zone", "z_range_mm": [-220.0, -100.0], "percent": 0.0, "transition_mm": 20.0},
             {"op": "landmark_relief", "id": "pt", "landmark": "pt_bar", "offset_mm": -6.0, "radius_mm": 20.0},
             {"op": "landmark_relief", "id": "fib", "landmark": "fibular_head", "offset_mm": 4.0, "radius_mm": 24.0},
             {"op": "landmark_relief", "id": "crest", "landmark": "tibial_crest", "offset_mm": 3.0, "radius_mm": 22.0},
             {"op": "landmark_relief", "id": "pop", "landmark": "popliteal", "offset_mm": -4.0, "radius_mm": 24.0},
         ],
+        shell={
+            "wall_distal_mm": 4.5,
+            "wall_proximal_mm": 2.5,
+            "trimline_fillet_mm": 10.0,
+            "proximal_trim_z_mm": 38.0,
+            "trimline": {
+                "preset": "ptb",
+                "anterior_z_mm": 30.0,
+                "posterior_z_mm": 0.0,
+                "medial_z_mm": 24.0,
+                "lateral_z_mm": 24.0,
+                "points": [],
+            },
+            "hardware": "pyramid_50_8_m6_captive",
+        },
     )
 
 
@@ -221,10 +250,43 @@ _HTML_PAGE = r"""<!DOCTYPE html>
   label.field .lbl { display: flex; justify-content: space-between; color: var(--text); }
   label.field .val { color: var(--accent); font-family: monospace; }
   input[type="range"] { width: 100%; accent-color: var(--accent); }
-  select, input[type="file"] {
+  select, input[type="file"], input[type="text"], input[type="number"] {
     background: var(--bg); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 6px 8px; font-size: 12px; width: 100%;
   }
+  .btn.sm { padding: 3px 8px; font-size: 11px; }
+  .btn.danger { background: rgba(239,68,68,0.22); color: #fca5a5; border: 1px solid var(--bad); }
+  .mod-box {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; margin-bottom: 8px;
+  }
+  .mod-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text);
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+  .hud-bottom.armed { border-color: var(--accent); color: #fff; background: rgba(2, 132, 199, 0.88); }
+  .lm-tags { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .lm-tag {
+    position: absolute; transform: translate(8px, -50%);
+    background: rgba(15, 23, 42, 0.78); color: #fde68a; border: 1px solid rgba(251, 191, 36, 0.55);
+    border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: ui-monospace, monospace;
+    white-space: nowrap;
+  }
+  .lm-tag.armed {
+    color: #bbf7d0; border-color: #22c55e; background: rgba(20, 83, 45, 0.88); font-weight: 700;
+  }
+  .heatmap-legend {
+    position: absolute; bottom: 12px; right: 12px; width: 210px;
+    background: rgba(15, 23, 42, 0.88); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 11px; color: var(--text);
+    backdrop-filter: blur(4px); pointer-events: none;
+  }
+  .heatmap-bar {
+    height: 10px; border-radius: 4px; margin: 5px 0 3px 0;
+    background: linear-gradient(90deg, #1d4ed8 0%, #38bdf8 25%, #cbd5e1 50%, #f59e0b 75%, #ef4444 100%);
+  }
+  .heatmap-ticks { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
   th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border); }
   th:first-child, td:first-child { text-align: left; }
@@ -288,10 +350,97 @@ _HTML_PAGE = r"""<!DOCTYPE html>
 
     <div id="step-3" class="step-pane hidden">
       <div class="card">
+        <h2>Interactive Sculpt & Smooth</h2>
+        <p class="mono" style="margin-top:0;">Paint directly on the smooth 3D mesh to add build-up, carve relief, or localize Taubin smoothing (Right-drag or Shift+drag orbits while painting).</p>
+        <div class="row" style="margin-bottom:8px;">
+          <button class="btn secondary sm" id="btnSculptAdd" style="flex:1;" onclick="toggleSculptTool('add')">+ Add</button>
+          <button class="btn secondary sm" id="btnSculptRem" style="flex:1;" onclick="toggleSculptTool('remove')">− Remove</button>
+          <button class="btn secondary sm" id="btnSculptSmooth" style="flex:1;" onclick="toggleSculptTool('smooth')">≈ Smooth Brush</button>
+        </div>
+        <div class="grid-2">
+          <label class="field" style="margin-bottom:0;">
+            <span class="lbl"><span>Depth / Mag (mm)</span></span>
+            <input type="number" id="sculptOffset" value="3.5" min="0.5" max="12" step="0.5" />
+          </label>
+          <label class="field" style="margin-bottom:0;">
+            <span class="lbl"><span>Brush Radius (mm)</span></span>
+            <input type="number" id="sculptRadius" value="22.0" min="8" max="60" step="1" />
+          </label>
+        </div>
+        <div class="grid-2" style="margin-top:6px;">
+          <label class="field" style="margin-bottom:0;">
+            <span class="lbl"><span>Brush Falloff</span></span>
+            <select id="sculptFalloff">
+              <option value="gaussian">Smooth Gaussian</option>
+              <option value="flat_pad">Flat Plateau Pad</option>
+            </select>
+          </label>
+          <label class="field" style="margin-bottom:0;">
+            <span class="lbl"><span>Smooth Passes</span></span>
+            <input type="number" id="smoothIters" value="4" min="1" max="15" step="1" />
+          </label>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn secondary sm" style="flex:1;" onclick="addGlobalSmooth()">≈ Smooth Entire Mesh (Taubin)</button>
+          <button class="btn danger sm" onclick="undoLastOperation()">Undo Last</button>
+        </div>
+      </div>
+      <div class="card">
         <h2>Non-Destructive Rectification (M_0)</h2>
         <div id="rectifyControls"></div>
         <div class="row" style="margin-top:8px;">
           <button class="btn" onclick="runRectify()">Apply & Preview Heatmap</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>+ Add Custom Modification</h2>
+        <p class="mono" style="margin-top:0;">Click anywhere on the 3D limb to place a custom relief/build-up pad, or add an arbitrary Z-height band.</p>
+        <div class="mod-box">
+          <div class="mod-head"><span>Custom Surface Patch</span></div>
+          <label class="field">
+            <span class="lbl"><span>Patch Label</span></span>
+            <input type="text" id="custLabel" placeholder="e.g. navicular_relief" />
+          </label>
+          <div class="grid-2">
+            <label class="field" style="margin-bottom:0;">
+              <span class="lbl"><span>Offset (mm)</span></span>
+              <input type="number" id="custOffset" value="4.0" min="-12" max="12" step="0.5" />
+            </label>
+            <label class="field" style="margin-bottom:0;">
+              <span class="lbl"><span>Radius (mm)</span></span>
+              <input type="number" id="custRadius" value="22.0" min="8" max="60" step="1" />
+            </label>
+          </div>
+          <label class="field">
+            <span class="lbl"><span>Contour Falloff</span></span>
+            <select id="custFalloff">
+              <option value="gaussian">Smooth Gaussian</option>
+              <option value="flat_pad">Flat Plateau Pad</option>
+            </select>
+          </label>
+          <button class="btn" id="btnArmCustomMod" style="width:100%;" onclick="armCustomMod()">Click 3D Mesh to Place & Apply</button>
+        </div>
+        <div class="mod-box" style="margin-bottom:0;">
+          <div class="mod-head"><span>Custom Z-Height Zone</span></div>
+          <label class="field">
+            <span class="lbl"><span>Zone Label</span></span>
+            <input type="text" id="custZoneLabel" placeholder="e.g. distal_flare" />
+          </label>
+          <div class="grid-2">
+            <label class="field" style="margin-bottom:0;">
+              <span class="lbl"><span>Z Min (mm)</span></span>
+              <input type="number" id="custZMin" value="-160" step="5" />
+            </label>
+            <label class="field" style="margin-bottom:0;">
+              <span class="lbl"><span>Z Max (mm)</span></span>
+              <input type="number" id="custZMax" value="-90" step="5" />
+            </label>
+          </div>
+          <label class="field">
+            <span class="lbl"><span>Radial Change (%)</span></span>
+            <input type="number" id="custZonePct" value="3.0" min="-15" max="15" step="0.5" />
+          </label>
+          <button class="btn secondary" style="width:100%;" onclick="addCustomZone()">+ Add Z-Zone & Apply</button>
         </div>
       </div>
       <div class="card">
@@ -322,14 +471,23 @@ _HTML_PAGE = r"""<!DOCTYPE html>
 
   <section class="viewport-wrap">
     <canvas id="glCanvas"></canvas>
+    <div id="landmarkTags" class="lm-tags"></div>
     <div class="hud-top">
       <div class="hud-card" id="meshHud">No mesh loaded</div>
       <div class="hud-card row">
+        <select id="renderMode" onchange="onRenderModeChange()" style="width:auto; padding:4px 8px;">
+          <option value="solid">Solid Shaded</option>
+          <option value="heatmap">Heatmap</option>
+          <option value="wire_only">Surface Hidden</option>
+        </select>
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
-          <input type="checkbox" id="chkWire" onchange="drawScene()" /> Wireframe
+          <input type="checkbox" id="chkWireframe" onchange="drawScene()" /> Wireframe
         </label>
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" id="chkLandmarks" checked onchange="drawScene()" /> Landmarks
+        </label>
+        <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
+          <input type="checkbox" id="chkTrimline" checked onchange="drawScene()" /> Trim Line
         </label>
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" id="chkSlices" checked onchange="drawScene()" /> 20mm Slices
@@ -340,8 +498,17 @@ _HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn secondary" onclick="resetCamera()">Reset View</button>
       </div>
     </div>
-    <div class="hud-bottom">
-      Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Pick Landmark (Step 2): Click surface
+    <div class="hud-bottom" id="hudBottom">
+      Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark or Custom Mod
+    </div>
+    <div class="heatmap-legend hidden" id="heatmapLegend">
+      <div id="heatmapTitle" style="font-weight:600;">Modification Heatmap (mm)</div>
+      <div class="heatmap-bar"></div>
+      <div class="heatmap-ticks">
+        <span id="hmMin">-8 mm</span>
+        <span id="hmMid">0</span>
+        <span id="hmMax">+8 mm</span>
+      </div>
     </div>
   </section>
 </main>
@@ -356,10 +523,94 @@ const state = {
   shellMesh: null,
   activeMeshKey: 'base',
   armedLandmark: null,
+  armedCustomMod: null,
+  armedTrimlineDraw: false,
+  sculptTool: null, // 'add' | 'remove' | 'smooth' | null
+  activeStrokePoints: [],
   lint: null,
   downloads: null,
   cam: { yaw: 0.55, pitch: 0.3, dist: 380, target: [0, 0, -60] }
 };
+
+const TRIMLINE_PRESETS = {
+  ptb: { anterior_z_mm: 30, posterior_z_mm: 0, medial_z_mm: 24, lateral_z_mm: 24 },
+  ptb_sc: { anterior_z_mm: 28, posterior_z_mm: -2, medial_z_mm: 48, lateral_z_mm: 46 },
+  ptb_scsp: { anterior_z_mm: 56, posterior_z_mm: -2, medial_z_mm: 50, lateral_z_mm: 48 },
+  tf_ischial: { anterior_z_mm: 32, posterior_z_mm: 18, medial_z_mm: 10, lateral_z_mm: 50 },
+  flat: { anterior_z_mm: 38, posterior_z_mm: 38, medial_z_mm: 38, lateral_z_mm: 38 }
+};
+
+function updateHudHint() {
+  const el = document.getElementById('hudBottom');
+  if (!el) return;
+  if (state.sculptTool) {
+    const names = { add: '+ ADD BUILD-UP', remove: '− REMOVE / CARVE', smooth: '≈ LOCAL TAUBIN SMOOTH' };
+    el.classList.add('armed');
+    el.textContent = `SCULPT BRUSH (${names[state.sculptTool]}): Left-click or drag on 3D mesh to paint · Right-drag to orbit · Click active brush button to stop.`;
+  } else if (state.armedTrimlineDraw) {
+    const n = (state.recipe && state.recipe.shell && state.recipe.shell.trimline && state.recipe.shell.trimline.points) ? state.recipe.shell.trimline.points.length : 0;
+    el.classList.add('armed');
+    el.textContent = `DRAW TRIM LINE (${n} pts): Click around the 3D limb surface to place socket cut points (>= 3 pts forms closed cut contour).`;
+  } else if (state.armedCustomMod) {
+    el.classList.add('armed');
+    el.textContent = `PLACE CUSTOM MOD "${state.armedCustomMod.label}": Click directly on the 3D limb surface (or click button again to cancel).`;
+  } else if (state.armedLandmark) {
+    el.classList.add('armed');
+    el.textContent = `PICK LANDMARK "${state.armedLandmark}": Click directly on the 3D limb surface.`;
+  } else {
+    el.classList.remove('armed');
+    el.textContent = 'Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark, Custom Mod, Sculpt Brush, or Trim Line';
+  }
+}
+
+function refreshSculptButtons() {
+  const map = { add: 'btnSculptAdd', remove: 'btnSculptRem', smooth: 'btnSculptSmooth' };
+  for (const [mode, id] of Object.entries(map)) {
+    const b = document.getElementById(id);
+    if (!b) continue;
+    const active = state.sculptTool === mode;
+    b.classList.toggle('ok', active);
+    b.classList.toggle('secondary', !active);
+  }
+}
+
+function toggleSculptTool(mode) {
+  if (!state.recipe) return;
+  state.armedLandmark = null;
+  state.armedCustomMod = null;
+  state.armedTrimlineDraw = false;
+  refreshCustomModButton();
+  state.sculptTool = (state.sculptTool === mode) ? null : mode;
+  state.activeStrokePoints = [];
+  if (state.sculptTool && state.activeMeshKey === 'shell') {
+    document.getElementById('chkShell').checked = false;
+    state.activeMeshKey = state.rectMesh ? 'rect' : 'base';
+    uploadMeshToGL();
+  }
+  refreshSculptButtons();
+  updateHudHint();
+  drawScene();
+}
+
+function addGlobalSmooth() {
+  if (!state.recipe) return;
+  const iters = Math.max(1, Math.min(20, parseInt(document.getElementById('smoothIters').value || '4', 10)));
+  let n = 1;
+  while (state.recipe.operations.some(o => o.id === 'smooth_global_' + n)) n++;
+  state.recipe.operations.push({
+    op: 'smooth',
+    id: 'smooth_global_' + n,
+    iterations: iters,
+    strength: 0.55
+  });
+  renderRectifyControls();
+  runRectify();
+}
+
+function undoLastOperation() {
+  if (!state.recipe || !state.recipe.operations.length) return;
+  removeOperation(state.recipe.operations.length - 1);
+}
 
 document.querySelectorAll('.step-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -367,6 +618,15 @@ document.querySelectorAll('.step-btn').forEach(btn => {
     document.querySelectorAll('.step-btn').forEach(b => b.classList.toggle('active', b === btn));
     document.querySelectorAll('.step-pane').forEach(p => p.classList.toggle('hidden', p.id !== 'step-' + step));
     if (step !== '2') { state.armedLandmark = null; renderLandmarks(); }
+    if (step !== '3') {
+      state.armedCustomMod = null;
+      state.sculptTool = null;
+      state.activeStrokePoints = [];
+      refreshCustomModButton();
+      refreshSculptButtons();
+    }
+    if (step !== '4') { state.armedTrimlineDraw = false; renderShellControls(); }
+    updateHudHint();
   });
 });
 
@@ -472,9 +732,85 @@ function renderLandmarks() {
 }
 
 function armLandmark(name) {
+  state.armedCustomMod = null;
+  refreshCustomModButton();
   state.armedLandmark = (state.armedLandmark === name) ? null : name;
   renderLandmarks();
+  updateHudHint();
   drawScene();
+}
+
+function refreshCustomModButton() {
+  const btn = document.getElementById('btnArmCustomMod');
+  if (!btn) return;
+  if (state.armedCustomMod) {
+    btn.classList.add('ok');
+    btn.textContent = 'Click 3D Mesh Surface Now... (Cancel)';
+  } else {
+    btn.classList.remove('ok');
+    btn.textContent = 'Click 3D Mesh to Place & Apply';
+  }
+}
+
+function sanitizeModName(raw, prefix) {
+  const cleaned = (raw || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  if (cleaned) return cleaned;
+  let n = 1;
+  while (state.recipe.landmarks && state.recipe.landmarks[`${prefix}_${n}`]) n++;
+  return `${prefix}_${n}`;
+}
+
+function armCustomMod() {
+  if (!state.recipe) return;
+  if (state.armedCustomMod) {
+    state.armedCustomMod = null;
+    refreshCustomModButton();
+    updateHudHint();
+    return;
+  }
+  state.armedLandmark = null;
+  renderLandmarks();
+  const label = sanitizeModName(document.getElementById('custLabel').value, 'custom_pad');
+  const offset = Number(document.getElementById('custOffset').value || 0);
+  const radius = Math.max(8, Number(document.getElementById('custRadius').value || 22));
+  const falloff = document.getElementById('custFalloff').value || 'gaussian';
+  state.armedCustomMod = { label, offset_mm: offset, radius_mm: radius, falloff };
+  refreshCustomModButton();
+  updateHudHint();
+}
+
+function addCustomZone() {
+  if (!state.recipe) return;
+  const label = sanitizeModName(document.getElementById('custZoneLabel').value, 'custom_zone');
+  const z0 = Number(document.getElementById('custZMin').value);
+  const z1 = Number(document.getElementById('custZMax').value);
+  const lo = Math.min(z0, z1), hi = Math.max(z0, z1);
+  const pct = Number(document.getElementById('custZonePct').value || 0);
+  state.recipe.operations.push({
+    op: 'zoned_compression',
+    id: label,
+    z_range_mm: [lo, hi],
+    percent: pct,
+    transition_mm: 18.0
+  });
+  document.getElementById('custZoneLabel').value = '';
+  renderRectifyControls();
+  runRectify();
+}
+
+function removeOperation(idx) {
+  if (!state.recipe || !state.recipe.operations[idx]) return;
+  const [removed] = state.recipe.operations.splice(idx, 1);
+  if (removed && removed.op === 'landmark_relief' && removed.landmark && state.recipe.landmarks) {
+    const stillUsed = state.recipe.operations.some(o => o.landmark === removed.landmark);
+    const coreLms = new Set(['pt_bar', 'fibular_head', 'tibial_crest', 'popliteal', 'medial_malleolus', 'lateral_malleolus', 'ischial_shelf', 'scarpas_triangle', 'trochanter']);
+    if (!stillUsed && !coreLms.has(removed.landmark)) {
+      delete state.recipe.landmarks[removed.landmark];
+      renderLandmarks();
+    }
+  }
+  renderRectifyControls();
+  runRectify();
 }
 
 function sliderField(id, label, min, max, step, val, unit, onChange) {
@@ -494,12 +830,73 @@ function renderRectifyControls() {
       'v => { state.recipe.liner_thickness_mm = v; }');
   }
   r.operations.forEach((op, idx) => {
-    if (op.op === 'global_compression' || op.op === 'zoned_compression') {
-      html += sliderField('op_' + idx, op.id + ' (%)', -10, 5, 0.5, op.percent, '%',
+    if (op.op === 'global_compression') {
+      html += sliderField('op_' + idx, op.id + ' (%)', -12, 8, 0.5, op.percent, '%',
         `v => { state.recipe.operations[${idx}].percent = v; }`);
+    } else if (op.op === 'zoned_compression') {
+      const zr = op.z_range_mm || [-200, -100];
+      html += `<div class="mod-box">
+        <div class="mod-head">
+          <span>${op.id} <span class="mono">Z[${zr[0]}..${zr[1]} mm]</span></span>
+          <button class="btn sm danger" onclick="removeOperation(${idx})">Remove</button>
+        </div>
+        ${sliderField('op_' + idx, 'Radial Zone (%)', -15, 15, 0.5, op.percent, '%',
+          `v => { state.recipe.operations[${idx}].percent = v; }`)}
+      </div>`;
     } else if (op.op === 'landmark_relief') {
-      html += sliderField('op_' + idx, op.landmark + ' relief', -10, 10, 0.5, op.offset_mm, 'mm',
-        `v => { state.recipe.operations[${idx}].offset_mm = v; }`);
+      const fall = op.falloff || 'gaussian';
+      html += `<div class="mod-box">
+        <div class="mod-head">
+          <span>${op.landmark}</span>
+          <button class="btn sm danger" onclick="removeOperation(${idx})">Remove</button>
+        </div>
+        ${sliderField('op_' + idx, 'Offset', -12, 12, 0.5, op.offset_mm, 'mm',
+          `v => { state.recipe.operations[${idx}].offset_mm = v; }`)}
+        ${sliderField('op_r_' + idx, 'Radius', 8, 60, 1, op.radius_mm ?? 22.0, 'mm',
+          `v => { state.recipe.operations[${idx}].radius_mm = v; }`)}
+        <label class="field" style="margin-bottom:0;">
+          <span class="lbl"><span>Falloff Profile</span></span>
+          <select onchange="state.recipe.operations[${idx}].falloff = this.value;">
+            <option value="gaussian" ${fall === 'gaussian' ? 'selected' : ''}>Smooth Gaussian</option>
+            <option value="flat_pad" ${fall === 'flat_pad' ? 'selected' : ''}>Flat Plateau Pad</option>
+          </select>
+        </label>
+      </div>`;
+    } else if (op.op === 'sculpt_stroke') {
+      const fall = op.falloff || 'gaussian';
+      const isAdd = (op.mode || 'add') === 'add';
+      const nPts = (op.points || []).length;
+      html += `<div class="mod-box">
+        <div class="mod-head">
+          <span>${isAdd ? '+ Add' : '− Remove'}: ${op.id} <span class="mono">(${nPts} pts)</span></span>
+          <button class="btn sm danger" onclick="removeOperation(${idx})">Remove</button>
+        </div>
+        ${sliderField('op_' + idx, isAdd ? 'Build-up Depth' : 'Carve Depth', 0.5, 12, 0.5, Math.abs(op.offset_mm ?? 3.0), 'mm',
+          `v => { state.recipe.operations[${idx}].offset_mm = v; }`)}
+        ${sliderField('op_r_' + idx, 'Brush Radius', 8, 60, 1, op.radius_mm ?? 22.0, 'mm',
+          `v => { state.recipe.operations[${idx}].radius_mm = v; }`)}
+        <label class="field" style="margin-bottom:0;">
+          <span class="lbl"><span>Falloff Profile</span></span>
+          <select onchange="state.recipe.operations[${idx}].falloff = this.value;">
+            <option value="gaussian" ${fall === 'gaussian' ? 'selected' : ''}>Smooth Gaussian</option>
+            <option value="flat_pad" ${fall === 'flat_pad' ? 'selected' : ''}>Flat Plateau Pad</option>
+          </select>
+        </label>
+      </div>`;
+    } else if (op.op === 'smooth') {
+      const local = (op.points && op.points.length) || op.xyz;
+      html += `<div class="mod-box">
+        <div class="mod-head">
+          <span>≈ ${local ? 'Local Smooth' : 'Global Smooth'}: ${op.id}</span>
+          <button class="btn sm danger" onclick="removeOperation(${idx})">Remove</button>
+        </div>
+        ${sliderField('op_it_' + idx, 'Taubin Passes', 1, 16, 1, op.iterations ?? 4, 'passes',
+          `v => { state.recipe.operations[${idx}].iterations = Math.round(v); }`)}
+        ${sliderField('op_st_' + idx, 'Smooth Strength', 0.1, 0.9, 0.05, op.strength ?? 0.55, '',
+          `v => { state.recipe.operations[${idx}].strength = v; }`)}
+        ${local ? sliderField('op_sr_' + idx, 'Smooth Radius', 10, 70, 2, op.radius_mm ?? 30.0, 'mm',
+          `v => { state.recipe.operations[${idx}].radius_mm = v; }`) : ''}
+      </div>`;
     } else if (op.op === 'afo_posture') {
       html += sliderField('op_df_' + idx, 'Dorsiflexion correction', -15, 25, 1, op.dorsiflexion_deg, '°',
         `v => { state.recipe.operations[${idx}].dorsiflexion_deg = v; }`);
@@ -512,6 +909,70 @@ function renderRectifyControls() {
   document.getElementById('rectifyControls').innerHTML = html;
 }
 
+function ensureTrimlineObj() {
+  if (!state.recipe) return null;
+  if (!state.recipe.shell) state.recipe.shell = {};
+  if (!state.recipe.shell.trimline) {
+    const defKey = state.recipe.device_type === 'transfemoral_socket' ? 'tf_ischial' : 'ptb';
+    state.recipe.shell.trimline = Object.assign({ preset: defKey, points: [] }, TRIMLINE_PRESETS[defKey]);
+  }
+  return state.recipe.shell.trimline;
+}
+
+function applyTrimlinePreset(key) {
+  const tl = ensureTrimlineObj();
+  if (!tl) return;
+  tl.preset = key;
+  if (TRIMLINE_PRESETS[key]) {
+    Object.assign(tl, TRIMLINE_PRESETS[key]);
+    tl.points = [];
+  }
+  renderShellControls();
+  drawScene();
+}
+
+function toggleTrimlineDraw() {
+  state.armedLandmark = null;
+  state.armedCustomMod = null;
+  state.armedTrimlineDraw = !state.armedTrimlineDraw;
+  if (state.armedTrimlineDraw) {
+    const tl = ensureTrimlineObj();
+    if (tl) tl.preset = 'custom';
+    // Show limb positive while placing trimline points if currently viewing compiled shell
+    if (state.activeMeshKey === 'shell') {
+      document.getElementById('chkShell').checked = false;
+      state.activeMeshKey = state.rectMesh ? 'rect' : 'base';
+      uploadMeshToGL();
+    }
+  }
+  renderShellControls();
+  updateHudHint();
+  drawScene();
+}
+
+function undoTrimlinePoint() {
+  const tl = ensureTrimlineObj();
+  if (tl && tl.points && tl.points.length) {
+    tl.points.pop();
+    renderShellControls();
+    updateHudHint();
+    drawScene();
+  }
+}
+
+function clearTrimlinePoints() {
+  const tl = ensureTrimlineObj();
+  if (tl) {
+    tl.points = [];
+    if (tl.preset === 'custom') {
+      tl.preset = state.recipe.device_type === 'transfemoral_socket' ? 'tf_ischial' : 'ptb';
+    }
+    renderShellControls();
+    updateHudHint();
+    drawScene();
+  }
+}
+
 function renderShellControls() {
   const r = state.recipe;
   if (!r) return;
@@ -522,6 +983,35 @@ function renderShellControls() {
   html += sliderField('wp', 'Proximal Brim / Calf Wall', 2.0, 5.0, 0.5, sh.wall_proximal_mm ?? 2.5, 'mm',
     'v => { state.recipe.shell.wall_proximal_mm = v; }');
   if (r.device_type !== 'afo') {
+    const tl = ensureTrimlineObj();
+    const nPts = (tl.points || []).length;
+    html += `<div class="mod-box">
+      <div class="mod-head"><span>Socket Trim Line (Cut Contour)</span><span class="mono">${nPts >= 3 ? nPts + ' custom pts' : (tl.preset || 'ptb').toUpperCase()}</span></div>
+      <label class="field">
+        <span class="lbl"><span>Clinical Trim Line Preset</span></span>
+        <select onchange="applyTrimlinePreset(this.value)">
+          <option value="ptb" ${tl.preset === 'ptb' ? 'selected' : ''}>PTB Standard (Anterior high / Popliteal dip)</option>
+          <option value="ptb_sc" ${tl.preset === 'ptb_sc' ? 'selected' : ''}>PTB-SC (Supracondylar M/L Ears)</option>
+          <option value="ptb_scsp" ${tl.preset === 'ptb_scsp' ? 'selected' : ''}>PTB-SCSP (Suprapatellar + Ears)</option>
+          <option value="tf_ischial" ${tl.preset === 'tf_ischial' ? 'selected' : ''}>TF Ischial Containment (High Lateral)</option>
+          <option value="flat" ${tl.preset === 'flat' ? 'selected' : ''}>Flat Planar Brim</option>
+          <option value="custom" ${tl.preset === 'custom' ? 'selected' : ''}>Custom Drawn Points</option>
+        </select>
+      </label>
+      ${sliderField('tl_ant', 'Anterior Brim Z', -20, 75, 1, tl.anterior_z_mm ?? 30, 'mm',
+        'v => { ensureTrimlineObj().anterior_z_mm = v; ensureTrimlineObj().points = []; drawScene(); }')}
+      ${sliderField('tl_post', 'Posterior Popliteal Dip Z', -40, 60, 1, tl.posterior_z_mm ?? 0, 'mm',
+        'v => { ensureTrimlineObj().posterior_z_mm = v; ensureTrimlineObj().points = []; drawScene(); }')}
+      ${sliderField('tl_med', 'Medial Wall Z', -20, 75, 1, tl.medial_z_mm ?? 24, 'mm',
+        'v => { ensureTrimlineObj().medial_z_mm = v; ensureTrimlineObj().points = []; drawScene(); }')}
+      ${sliderField('tl_lat', 'Lateral Wall Z', -20, 75, 1, tl.lateral_z_mm ?? 24, 'mm',
+        'v => { ensureTrimlineObj().lateral_z_mm = v; ensureTrimlineObj().points = []; drawScene(); }')}
+      <div class="row" style="margin-top:6px;">
+        <button class="btn ${state.armedTrimlineDraw ? 'ok' : 'secondary'} sm" style="flex:1;" onclick="toggleTrimlineDraw()">${state.armedTrimlineDraw ? 'Stop Drawing Cut Line' : 'Click 3D Mesh to Draw Trim Line'}</button>
+        <button class="btn secondary sm" onclick="undoTrimlinePoint()" ${nPts ? '' : 'disabled'}>Undo Pt</button>
+        <button class="btn danger sm" onclick="clearTrimlinePoints()" ${nPts ? '' : 'disabled'}>Clear</button>
+      </div>
+    </div>`;
     html += sliderField('flex', 'Bench Alignment Flexion', -5, 15, 0.5, al.flexion_deg ?? 5.0, '°',
       'v => { state.recipe.alignment.flexion_deg = v; }');
     html += sliderField('add', 'Bench Alignment Adduction', -5, 15, 0.5, al.adduction_deg ?? 5.0, '°',
@@ -540,6 +1030,8 @@ async function runRectify() {
   const data = await apiJson('/api/rectify', { session_id: state.sessionId, recipe: state.recipe });
   state.rectMesh = data.rectified;
   state.activeMeshKey = 'rect';
+  const sel = document.getElementById('renderMode');
+  if (sel && sel.value === 'solid') sel.value = 'heatmap';
   await refreshDiff();
   uploadMeshToGL();
 }
@@ -589,9 +1081,10 @@ function renderDownloads() {
 const canvas = document.getElementById('glCanvas');
 const gl = canvas.getContext('webgl', { antialias: true });
 const extUint = gl ? gl.getExtension('OES_element_index_uint') : null;
-let prog = null, lineProg = null, vboPos = null, vboNorm = null, vboCol = null, ibo = null;
-let vboOvPos = null, vboOvCol = null, indexCount = 0;
+let prog = null, lineProg = null, vboPos = null, vboNorm = null, vboCol = null, ibo = null, iboWire = null;
+let vboOvPos = null, vboOvCol = null, indexCount = 0, wireIndexCount = 0;
 let indexType = gl ? gl.UNSIGNED_SHORT : 0;
+let wireIndexType = gl ? gl.UNSIGNED_SHORT : 0;
 let lastMVP = null;
 
 function initGL() {
@@ -612,13 +1105,25 @@ function initGL() {
     precision mediump float;
     varying vec3 vNorm;
     varying vec3 vCol;
-    uniform vec3 uLightDir;
+    uniform vec3 uKeyLightDir;
+    uniform vec3 uFillLightDir;
+    uniform vec3 uViewDir;
     uniform float uWire;
     void main() {
-      if (uWire > 0.5) { gl_FragColor = vec4(0.15, 0.7, 0.95, 0.6); return; }
+      if (uWire > 1.5) {
+        gl_FragColor = vec4(mix(vCol, vec3(0.32, 0.84, 1.0), 0.55), 1.0);
+        return;
+      }
+      if (uWire > 0.5) {
+        gl_FragColor = vec4(0.14, 0.58, 0.82, 1.0);
+        return;
+      }
       vec3 n = normalize(vNorm);
-      float diff = max(abs(dot(n, uLightDir)), 0.15);
-      vec3 lit = vCol * (0.28 + 0.72 * diff);
+      float diffKey = abs(dot(n, uKeyLightDir));
+      float diffFill = abs(dot(n, uFillLightDir));
+      vec3 halfVec = normalize(uKeyLightDir + uViewDir);
+      float spec = pow(abs(dot(n, halfVec)), 16.0) * 0.14;
+      vec3 lit = vCol * (0.24 + 0.58 * diffKey + 0.22 * diffFill) + vec3(spec);
       gl_FragColor = vec4(lit, 1.0);
     }`;
   const lvs = `
@@ -629,8 +1134,9 @@ function initGL() {
     void main() { vCol = aCol; gl_Position = uMVP * vec4(aPos, 1.0); }`;
   const lfs = `
     precision mediump float;
+    uniform float uAlpha;
     varying vec3 vCol;
-    void main() { gl_FragColor = vec4(vCol, 1.0); }`;
+    void main() { gl_FragColor = vec4(vCol, uAlpha); }`;
   function compile(type, src) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src);
@@ -649,16 +1155,109 @@ function initGL() {
   vboNorm = gl.createBuffer();
   vboCol = gl.createBuffer();
   ibo = gl.createBuffer();
+  iboWire = gl.createBuffer();
   vboOvPos = gl.createBuffer();
   vboOvCol = gl.createBuffer();
 }
 
-function deltaToColor(d) {
-  if (d === undefined || d === null) return [0.78, 0.82, 0.87];
-  if (Math.abs(d) < 0.15) return [0.78, 0.82, 0.87];
-  const t = Math.min(1.0, Math.abs(d) / 5.0);
-  if (d > 0) return [0.78 + 0.20 * t, 0.82 - 0.35 * t, 0.87 - 0.55 * t]; // build-up: warm amber
-  return [0.78 - 0.48 * t, 0.82 - 0.15 * t, 0.87 + 0.10 * t];            // compression: cool blue
+function lerpColor(a, b, t) {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+function divergingHeatmapColor(normVal) {
+  // normVal in [-1, +1]: deep blue -> sky cyan -> light gray -> amber -> crimson red
+  const v = Math.max(-1.0, Math.min(1.0, normVal));
+  const cNeg2 = [0.11, 0.31, 0.85];
+  const cNeg1 = [0.22, 0.74, 0.97];
+  const cZero = [0.80, 0.84, 0.88];
+  const cPos1 = [0.96, 0.62, 0.04];
+  const cPos2 = [0.94, 0.27, 0.27];
+  if (v <= -0.5) return lerpColor(cNeg2, cNeg1, (v + 1.0) / 0.5);
+  if (v < 0.0) return lerpColor(cNeg1, cZero, (v + 0.5) / 0.5);
+  if (v <= 0.5) return lerpColor(cZero, cPos1, v / 0.5);
+  return lerpColor(cPos1, cPos2, (v - 0.5) / 0.5);
+}
+
+function computeMeanCurvatureScores(m) {
+  const nV = m.vertex_count, verts = m.vertices, norms = m.normals, idxs = m.indices;
+  const sumX = new Float32Array(nV), sumY = new Float32Array(nV), sumZ = new Float32Array(nV);
+  const cnt = new Uint16Array(nV);
+  for (let i = 0; i < idxs.length; i += 3) {
+    const a = idxs[i], b = idxs[i + 1], c = idxs[i + 2];
+    const pairs = [[a, b], [b, c], [c, a]];
+    for (const [u, v] of pairs) {
+      sumX[u] += verts[v*3]; sumY[u] += verts[v*3+1]; sumZ[u] += verts[v*3+2]; cnt[u]++;
+      sumX[v] += verts[u*3]; sumY[v] += verts[u*3+1]; sumZ[v] += verts[u*3+2]; cnt[v]++;
+    }
+  }
+  const scores = new Float32Array(nV);
+  for (let i = 0; i < nV; i++) {
+    if (!cnt[i]) continue;
+    const inv = 1.0 / cnt[i];
+    const lx = verts[i*3] - sumX[i]*inv;
+    const ly = verts[i*3+1] - sumY[i]*inv;
+    const lz = verts[i*3+2] - sumZ[i]*inv;
+    // Positive when vertex protrudes outward along its normal (bony prominence), negative in hollows
+    scores[i] = lx * norms[i*3] + ly * norms[i*3+1] + lz * norms[i*3+2];
+  }
+  return scores;
+}
+
+function updateMeshColors() {
+  const m = getDisplayMesh();
+  if (!m || !gl) return;
+  const mode = document.getElementById('renderMode').value;
+  const nVerts = m.vertex_count;
+  const cols = new Float32Array(nVerts * 3);
+  const legend = document.getElementById('heatmapLegend');
+
+  if (mode === 'heatmap') {
+    if (m.deltas && m.deltas.length === nVerts) {
+      const range = 8.0;
+      for (let i = 0; i < nVerts; i++) {
+        const c = divergingHeatmapColor(m.deltas[i] / range);
+        cols[i*3] = c[0]; cols[i*3+1] = c[1]; cols[i*3+2] = c[2];
+      }
+      if (legend) {
+        legend.classList.remove('hidden');
+        document.getElementById('heatmapTitle').textContent = 'Rectification Delta Heatmap';
+        document.getElementById('hmMin').textContent = '-8 mm (Carve)';
+        document.getElementById('hmMid').textContent = '0 mm';
+        document.getElementById('hmMax').textContent = '+8 mm (Add)';
+      }
+    } else {
+      if (!m._curvScores) m._curvScores = computeMeanCurvatureScores(m);
+      const scores = m._curvScores;
+      const scale = 0.45;
+      for (let i = 0; i < nVerts; i++) {
+        const c = divergingHeatmapColor(scores[i] / scale);
+        cols[i*3] = c[0]; cols[i*3+1] = c[1]; cols[i*3+2] = c[2];
+      }
+      if (legend) {
+        legend.classList.remove('hidden');
+        document.getElementById('heatmapTitle').textContent = 'Anatomical Curvature Heatmap';
+        document.getElementById('hmMin').textContent = 'Concave';
+        document.getElementById('hmMid').textContent = 'Flat';
+        document.getElementById('hmMax').textContent = 'Prominent';
+      }
+    }
+  } else {
+    for (let i = 0; i < nVerts; i++) {
+      cols[i*3] = 0.80; cols[i*3+1] = 0.84; cols[i*3+2] = 0.88;
+    }
+    if (legend) legend.classList.add('hidden');
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
+  gl.bufferData(gl.ARRAY_BUFFER, cols, gl.STATIC_DRAW);
+}
+
+function onRenderModeChange() {
+  const mode = document.getElementById('renderMode').value;
+  if (mode === 'wire_only') {
+    document.getElementById('chkWireframe').checked = true;
+  }
+  updateMeshColors();
+  drawScene();
 }
 
 function uploadMeshToGL() {
@@ -668,17 +1267,11 @@ function uploadMeshToGL() {
     `${state.activeMeshKey.toUpperCase()} · ${m.vertex_count} verts · ${m.face_count} tris`;
   if (!gl) return;
   const nVerts = m.vertex_count;
-  const cols = new Float32Array(nVerts * 3);
-  for (let i = 0; i < nVerts; i++) {
-    const c = deltaToColor(m.deltas ? m.deltas[i] : null);
-    cols[i*3] = c[0]; cols[i*3+1] = c[1]; cols[i*3+2] = c[2];
-  }
   gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(m.vertices), gl.STATIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, vboNorm);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(m.normals), gl.STATIC_DRAW);
-  gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
-  gl.bufferData(gl.ARRAY_BUFFER, cols, gl.STATIC_DRAW);
+  updateMeshColors();
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
   if (extUint && nVerts > 65535) {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(m.indices), gl.STATIC_DRAW);
@@ -688,6 +1281,32 @@ function uploadMeshToGL() {
     indexType = gl.UNSIGNED_SHORT;
   }
   indexCount = m.indices.length;
+
+  // Build deduplicated unique edge list from triangles for clean wireframe rendering
+  const seenEdges = new Set();
+  const wireIndices = [];
+  for (let i = 0; i < m.indices.length; i += 3) {
+    const a = m.indices[i], b = m.indices[i + 1], c = m.indices[i + 2];
+    const pairs = [[a, b], [b, c], [c, a]];
+    for (const [p0, p1] of pairs) {
+      const lo = p0 < p1 ? p0 : p1;
+      const hi = p0 < p1 ? p1 : p0;
+      const key = lo * nVerts + hi;
+      if (!seenEdges.has(key)) {
+        seenEdges.add(key);
+        wireIndices.push(lo, hi);
+      }
+    }
+  }
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, iboWire);
+  if (extUint && nVerts > 65535) {
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(wireIndices), gl.STATIC_DRAW);
+    wireIndexType = gl.UNSIGNED_INT;
+  } else {
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(wireIndices), gl.STATIC_DRAW);
+    wireIndexType = gl.UNSIGNED_SHORT;
+  }
+  wireIndexCount = wireIndices.length;
   drawScene();
 }
 
@@ -750,8 +1369,24 @@ function drawScene() {
   const camInfo = computeMVP(w / Math.max(1, h));
   lastMVP = camInfo;
   gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uMVP'), false, camInfo.mvp);
-  gl.uniform3f(gl.getUniformLocation(prog, 'uLightDir'), 0.45, 0.65, 0.60);
-  gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), 0.0);
+
+  // Camera-locked lighting basis: always illuminate facing the camera view across orbit angles
+  const { f, r, u } = camInfo;
+  function norm3(v) { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; }
+  const viewDir = [-f[0], -f[1], -f[2]];
+  const keyDir = norm3([
+    viewDir[0] * 0.80 + r[0] * 0.42 + u[0] * 0.44,
+    viewDir[1] * 0.80 + r[1] * 0.42 + u[1] * 0.44,
+    viewDir[2] * 0.80 + r[2] * 0.42 + u[2] * 0.44,
+  ]);
+  const fillDir = norm3([
+    viewDir[0] * 0.65 - r[0] * 0.52 - u[0] * 0.28,
+    viewDir[1] * 0.65 - r[1] * 0.52 - u[1] * 0.28,
+    viewDir[2] * 0.65 - r[2] * 0.52 - u[2] * 0.28,
+  ]);
+  gl.uniform3f(gl.getUniformLocation(prog, 'uKeyLightDir'), keyDir[0], keyDir[1], keyDir[2]);
+  gl.uniform3f(gl.getUniformLocation(prog, 'uFillLightDir'), fillDir[0], fillDir[1], fillDir[2]);
+  gl.uniform3f(gl.getUniformLocation(prog, 'uViewDir'), viewDir[0], viewDir[1], viewDir[2]);
 
   const locP = gl.getAttribLocation(prog, 'aPos');
   gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
@@ -768,54 +1403,34 @@ function drawScene() {
   gl.enableVertexAttribArray(locC);
   gl.vertexAttribPointer(locC, 3, gl.FLOAT, false, 0, 0);
 
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-  gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
-  if (document.getElementById('chkWire').checked) {
-    gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), 1.0);
-    gl.drawElements(gl.LINES, indexCount, indexType, 0);
+  const renderMode = document.getElementById('renderMode').value;
+  const showWire = document.getElementById('chkWireframe') && document.getElementById('chkWireframe').checked;
+  const showSurface = renderMode !== 'wire_only';
+  if (showSurface) {
+    if (showWire) {
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(1.0, 1.0);
+    }
+    gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), 0.0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
+    if (showWire) {
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+    }
+  }
+  if (showWire && wireIndexCount > 0) {
+    gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), showSurface ? 1.0 : 2.0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, iboWire);
+    gl.drawElements(gl.LINES, wireIndexCount, wireIndexType, 0);
   }
   drawOverlays(camInfo.mvp);
 }
 
-function drawOverlays(mvp) {
-  if (!lineProg) return;
-  const pts = [], cols = [];
-  const m = getDisplayMesh();
-  if (document.getElementById('chkSlices').checked && state.qa && state.qa.slices && m) {
-    const cx = m.center[0], cy = m.center[1];
-    const r = Math.max(Math.abs(m.bounds.max[0]-m.bounds.min[0]), Math.abs(m.bounds.max[1]-m.bounds.min[1])) * 0.58;
-    const segs = 36;
-    for (const s of state.qa.slices) {
-      const z = s.z_mm;
-      for (let k = 0; k < segs; k++) {
-        const a0 = 2 * Math.PI * k / segs, a1 = 2 * Math.PI * (k + 1) / segs;
-        pts.push(cx + r*Math.cos(a0), cy + r*Math.sin(a0), z, cx + r*Math.cos(a1), cy + r*Math.sin(a1), z);
-        cols.push(0.22, 0.74, 0.97, 0.22, 0.74, 0.97);
-      }
-    }
-  }
-  if (document.getElementById('chkLandmarks').checked && state.recipe && state.recipe.landmarks) {
-    for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
-      const p = spec.xyz;
-      if (!p) continue;
-      const armed = state.armedLandmark === name;
-      const col = armed ? [0.13, 0.85, 0.45] : [0.98, 0.75, 0.15];
-      const s = armed ? 9.0 : 6.0;
-      const segs = [
-        [p[0]-s, p[1], p[2], p[0]+s, p[1], p[2]],
-        [p[0], p[1]-s, p[2], p[0], p[1]+s, p[2]],
-        [p[0], p[1], p[2]-s, p[0], p[1], p[2]+s],
-        [p[0]-s, p[1], p[2], p[0], p[1]+s, p[2]],
-        [p[0], p[1]+s, p[2], p[0]+s, p[1], p[2]],
-        [p[0]+s, p[1], p[2], p[0], p[1]-s, p[2]],
-        [p[0], p[1]-s, p[2], p[0]-s, p[1], p[2]]
-      ];
-      for (const sg of segs) { pts.push(...sg); cols.push(...col, ...col); }
-    }
-  }
+function drawLineBatch(pts, cols, mvp, alpha) {
   if (!pts.length) return;
   gl.useProgram(lineProg);
   gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, 'uMVP'), false, mvp);
+  gl.uniform1f(gl.getUniformLocation(lineProg, 'uAlpha'), alpha);
   const lp = gl.getAttribLocation(lineProg, 'aPos');
   gl.bindBuffer(gl.ARRAY_BUFFER, vboOvPos);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pts), gl.DYNAMIC_DRAW);
@@ -827,6 +1442,184 @@ function drawOverlays(mvp) {
   gl.enableVertexAttribArray(lc);
   gl.vertexAttribPointer(lc, 3, gl.FLOAT, false, 0, 0);
   gl.drawArrays(gl.LINES, 0, pts.length / 3);
+}
+
+function renderLandmarkTags(mvp) {
+  const wrap = document.getElementById('landmarkTags');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!document.getElementById('chkLandmarks').checked || !state.recipe || !state.recipe.landmarks) return;
+  for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
+    const p = spec.xyz;
+    if (!p) continue;
+    const cx = mvp[0]*p[0] + mvp[4]*p[1] + mvp[8]*p[2] + mvp[12];
+    const cy = mvp[1]*p[0] + mvp[5]*p[1] + mvp[9]*p[2] + mvp[13];
+    const cw = mvp[3]*p[0] + mvp[7]*p[1] + mvp[11]*p[2] + mvp[15];
+    if (cw <= 1e-4) continue;
+    const nx = cx / cw, ny = cy / cw;
+    if (nx < -1.05 || nx > 1.05 || ny < -1.05 || ny > 1.05) continue;
+    const tag = document.createElement('div');
+    tag.className = 'lm-tag' + (state.armedLandmark === name ? ' armed' : '');
+    tag.textContent = name;
+    tag.style.left = ((nx * 0.5 + 0.5) * 100).toFixed(2) + '%';
+    tag.style.top = ((0.5 - ny * 0.5) * 100).toFixed(2) + '%';
+    wrap.appendChild(tag);
+  }
+}
+
+function evalTrimlineZJS(theta, tl, cx, cy) {
+  const pts = (tl && tl.points) || [];
+  if (pts.length >= 3) {
+    const knots = pts.map(p => [Math.atan2(p[1] - cy, p[0] - cx), p[2]]).sort((a, b) => a[0] - b[0]);
+    const ext = [[knots[knots.length - 1][0] - 2 * Math.PI, knots[knots.length - 1][1]], ...knots, [knots[0][0] + 2 * Math.PI, knots[0][1]]];
+    const th = Math.atan2(Math.sin(theta), Math.cos(theta));
+    for (let k = 0; k < ext.length - 1; k++) {
+      const a0 = ext[k][0], z0 = ext[k][1], a1 = ext[k + 1][0], z1 = ext[k + 1][1];
+      if (a0 <= th && th <= a1) {
+        const t = Math.max(0, Math.min(1, (th - a0) / Math.max(1e-9, a1 - a0)));
+        const w = t * t * t * (t * (t * 6 - 15) + 10);
+        return z0 * (1 - w) + z1 * w;
+      }
+    }
+  }
+  const zA = tl.anterior_z_mm ?? 30, zP = tl.posterior_z_mm ?? 0, zM = tl.medial_z_mm ?? 24, zL = tl.lateral_z_mm ?? 24;
+  const ct = Math.cos(theta), st = Math.sin(theta);
+  const wA = Math.max(0, st) ** 2, wP = Math.max(0, -st) ** 2;
+  const wL = Math.max(0, ct) ** 2, wM = Math.max(0, -ct) ** 2;
+  return zA * wA + zP * wP + zL * wL + zM * wM;
+}
+
+function buildTrimlineOverlay(m, tl, outPts, outCols) {
+  if (!m || !tl || !state.recipe || state.recipe.device_type === 'afo') return;
+  const verts = m.vertices, idxs = m.indices, nV = m.vertex_count;
+  const zmin = m.bounds.min[2], zmax = m.bounds.max[2], span = Math.max(1e-6, zmax - zmin);
+  const zLo = zmin + 0.25 * span, zHi = zmin + 0.75 * span;
+  let sx = 0, sy = 0, cnt = 0;
+  for (let i = 0; i < nV; i++) {
+    const z = verts[i * 3 + 2];
+    if (z >= zLo && z <= zHi) { sx += verts[i * 3]; sy += verts[i * 3 + 1]; cnt++; }
+  }
+  const cx = cnt >= 12 ? sx / cnt : m.center[0];
+  const cy = cnt >= 12 ? sy / cnt : m.center[1];
+
+  // Marching-triangles exact zero-contour of f(v) = z_trim(theta_v) - z_v on the limb surface
+  const vals = new Float32Array(nV);
+  for (let i = 0; i < nV; i++) {
+    const x = verts[i * 3], y = verts[i * 3 + 1], z = verts[i * 3 + 2];
+    const zt = evalTrimlineZJS(Math.atan2(y - cy, x - cx), tl, cx, cy);
+    vals[i] = zt - z;
+  }
+  const col = [1.0, 0.22, 0.55];
+  for (let i = 0; i < idxs.length; i += 3) {
+    const ia = idxs[i], ib = idxs[i + 1], ic = idxs[i + 2];
+    const fa = vals[ia], fb = vals[ib], fc = vals[ic];
+    const hits = [];
+    const pairs = [[ia, ib, fa, fb], [ib, ic, fb, fc], [ic, ia, fc, fa]];
+    for (const [u, v, fu, fv] of pairs) {
+      if ((fu >= 0 && fv < 0) || (fu < 0 && fv >= 0)) {
+        const t = fu / (fu - fv);
+        hits.push([
+          verts[u*3] + t * (verts[v*3] - verts[u*3]),
+          verts[u*3+1] + t * (verts[v*3+1] - verts[u*3+1]),
+          verts[u*3+2] + t * (verts[v*3+2] - verts[u*3+2])
+        ]);
+      }
+    }
+    if (hits.length === 2) {
+      outPts.push(...hits[0], ...hits[1]);
+      outCols.push(...col, ...col);
+    }
+  }
+  // Draw any user-clicked custom trimline control points as bright markers
+  const cPts = tl.points || [];
+  for (const p of cPts) {
+    const s = 6.5;
+    const mCol = [1.0, 0.42, 0.72];
+    const segs = [
+      [p[0]-s, p[1], p[2], p[0]+s, p[1], p[2]],
+      [p[0], p[1]-s, p[2], p[0], p[1]+s, p[2]],
+      [p[0], p[1], p[2]-s, p[0], p[1], p[2]+s]
+    ];
+    for (const sg of segs) { outPts.push(...sg); outCols.push(...mCol, ...mCol); }
+  }
+}
+
+function drawOverlays(mvp) {
+  if (!lineProg) return;
+  const slicePts = [], sliceCols = [];
+  const lmPts = [], lmCols = [];
+  const m = getDisplayMesh();
+  if (document.getElementById('chkSlices').checked && state.qa && state.qa.slices && m) {
+    const cx = m.center[0], cy = m.center[1];
+    const r = Math.max(Math.abs(m.bounds.max[0]-m.bounds.min[0]), Math.abs(m.bounds.max[1]-m.bounds.min[1])) * 0.58;
+    const segs = 36;
+    for (const s of state.qa.slices) {
+      const z = s.z_mm;
+      for (let k = 0; k < segs; k++) {
+        const a0 = 2 * Math.PI * k / segs, a1 = 2 * Math.PI * (k + 1) / segs;
+        slicePts.push(cx + r*Math.cos(a0), cy + r*Math.sin(a0), z, cx + r*Math.cos(a1), cy + r*Math.sin(a1), z);
+        sliceCols.push(0.22, 0.74, 0.97, 0.22, 0.74, 0.97);
+      }
+    }
+  }
+  if (document.getElementById('chkTrimline') && document.getElementById('chkTrimline').checked && state.activeMeshKey !== 'shell' && state.recipe && state.recipe.shell && state.recipe.shell.trimline) {
+    buildTrimlineOverlay(m, state.recipe.shell.trimline, lmPts, lmCols);
+  }
+  if (state.activeStrokePoints && state.activeStrokePoints.length) {
+    const sCol = state.sculptTool === 'remove' ? [0.25, 0.72, 1.0] : (state.sculptTool === 'smooth' ? [0.20, 0.92, 0.78] : [1.0, 0.62, 0.15]);
+    const pts = state.activeStrokePoints;
+    for (let k = 0; k < pts.length - 1; k++) {
+      lmPts.push(...pts[k], ...pts[k + 1]);
+      lmCols.push(...sCol, ...sCol);
+    }
+    for (const p of pts) {
+      const s = 3.5;
+      lmPts.push(p[0]-s, p[1], p[2], p[0]+s, p[1], p[2], p[0], p[1]-s, p[2], p[0], p[1]+s, p[2], p[0], p[1], p[2]-s, p[0], p[1], p[2]+s);
+      lmCols.push(...sCol, ...sCol, ...sCol, ...sCol, ...sCol, ...sCol);
+    }
+  }
+  if (document.getElementById('chkLandmarks').checked && state.recipe && state.recipe.landmarks) {
+    for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
+      const p = spec.xyz;
+      if (!p) continue;
+      const armed = state.armedLandmark === name;
+      const col = armed ? [0.13, 0.90, 0.45] : [0.98, 0.78, 0.15];
+      const s = armed ? 10.5 : 7.5;
+      const segs = [
+        [p[0]-s, p[1], p[2], p[0]+s, p[1], p[2]],
+        [p[0], p[1]-s, p[2], p[0], p[1]+s, p[2]],
+        [p[0], p[1], p[2]-s, p[0], p[1], p[2]+s],
+        [p[0]-s, p[1], p[2], p[0], p[1]+s, p[2]],
+        [p[0], p[1]+s, p[2], p[0]+s, p[1], p[2]],
+        [p[0]+s, p[1], p[2], p[0], p[1]-s, p[2]],
+        [p[0], p[1]-s, p[2], p[0]-s, p[1], p[2]],
+        [p[0]-s, p[1], p[2], p[0], p[1], p[2]+s],
+        [p[0], p[1], p[2]+s, p[0]+s, p[1], p[2]],
+        [p[0]+s, p[1], p[2], p[0], p[1], p[2]-s],
+        [p[0], p[1], p[2]-s, p[0]-s, p[1], p[2]]
+      ];
+      for (const sg of segs) { lmPts.push(...sg); lmCols.push(...col, ...col); }
+    }
+  }
+  gl.depthFunc(gl.LEQUAL);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+  drawLineBatch(slicePts, sliceCols, mvp, 1.0);
+
+  if (lmPts.length) {
+    // Pass 1: crisp unoccluded parts in front of the surface
+    drawLineBatch(lmPts, lmCols, mvp, 1.0);
+    // Pass 2: X-ray pass visible through the solid mesh so landmarks can be verified from any angle
+    gl.depthFunc(gl.GREATER);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    drawLineBatch(lmPts, lmCols, mvp, 0.50);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
+  renderLandmarkTags(mvp);
 }
 
 function pickSurfacePoint(clientX, clientY) {
@@ -871,14 +1664,102 @@ function pickSurfacePoint(clientX, clientY) {
   return bestPt;
 }
 
-let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
-canvas.addEventListener('mousedown', e => { dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY; });
+let dragging = false, dragMoved = false, sculptPainting = false, lastX = 0, lastY = 0;
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('mousedown', e => {
+  lastX = e.clientX; lastY = e.clientY;
+  dragMoved = false;
+  if (state.sculptTool && e.button === 0 && !e.shiftKey && !e.altKey) {
+    sculptPainting = true;
+    const pt = pickSurfacePoint(e.clientX, e.clientY);
+    state.activeStrokePoints = pt ? [pt.map(v => Number(v.toFixed(2)))] : [];
+    drawScene();
+    return;
+  }
+  dragging = true;
+});
 window.addEventListener('mouseup', e => {
-  if (dragging && !dragMoved && state.armedLandmark) {
+  if (sculptPainting) {
+    sculptPainting = false;
+    const pts = state.activeStrokePoints || [];
+    state.activeStrokePoints = [];
+    if (pts.length && state.recipe && state.sculptTool) {
+      const mode = state.sculptTool;
+      const rad = Math.max(8, Number(document.getElementById('sculptRadius').value || 22));
+      if (mode === 'smooth') {
+        const iters = Math.max(1, Math.min(20, parseInt(document.getElementById('smoothIters').value || '4', 10)));
+        let n = 1;
+        while (state.recipe.operations.some(o => o.id === 'smooth_brush_' + n)) n++;
+        state.recipe.operations.push({
+          op: 'smooth',
+          id: 'smooth_brush_' + n,
+          points: pts,
+          radius_mm: rad,
+          iterations: iters,
+          strength: 0.6
+        });
+      } else {
+        const mag = Math.max(0.5, Number(document.getElementById('sculptOffset').value || 3.5));
+        const fall = document.getElementById('sculptFalloff').value || 'gaussian';
+        let n = 1;
+        while (state.recipe.operations.some(o => o.id === `sculpt_${mode}_${n}`)) n++;
+        state.recipe.operations.push({
+          op: 'sculpt_stroke',
+          id: `sculpt_${mode}_${n}`,
+          mode,
+          points: pts,
+          offset_mm: mag,
+          radius_mm: rad,
+          falloff: fall
+        });
+      }
+      renderRectifyControls();
+      runRectify();
+    } else {
+      drawScene();
+    }
+    return;
+  }
+  if (dragging && !dragMoved && state.armedTrimlineDraw) {
+    const pt = pickSurfacePoint(e.clientX, e.clientY);
+    if (pt) {
+      const tl = ensureTrimlineObj();
+      if (tl) {
+        if (!tl.points) tl.points = [];
+        tl.preset = 'custom';
+        tl.points.push(pt.map(v => Number(v.toFixed(2))));
+        renderShellControls();
+        updateHudHint();
+        drawScene();
+      }
+    }
+  } else if (dragging && !dragMoved && state.armedCustomMod) {
+    const pt = pickSurfacePoint(e.clientX, e.clientY);
+    if (pt) {
+      const cfg = state.armedCustomMod;
+      state.recipe.landmarks[cfg.label] = { xyz: pt.map(v => Number(v.toFixed(2))) };
+      state.recipe.operations.push({
+        op: 'landmark_relief',
+        id: 'mod_' + cfg.label,
+        landmark: cfg.label,
+        offset_mm: cfg.offset_mm,
+        radius_mm: cfg.radius_mm,
+        falloff: cfg.falloff
+      });
+      state.armedCustomMod = null;
+      document.getElementById('custLabel').value = '';
+      refreshCustomModButton();
+      updateHudHint();
+      renderLandmarks();
+      renderRectifyControls();
+      runRectify();
+    }
+  } else if (dragging && !dragMoved && state.armedLandmark) {
     const pt = pickSurfacePoint(e.clientX, e.clientY);
     if (pt) {
       state.recipe.landmarks[state.armedLandmark] = { xyz: pt.map(v => Number(v.toFixed(2))) };
       state.armedLandmark = null;
+      updateHudHint();
       renderLandmarks();
       drawScene();
     }
@@ -886,6 +1767,18 @@ window.addEventListener('mouseup', e => {
   dragging = false;
 });
 window.addEventListener('mousemove', e => {
+  if (sculptPainting) {
+    const pt = pickSurfacePoint(e.clientX, e.clientY);
+    if (pt) {
+      const pts = state.activeStrokePoints;
+      const prev = pts.length ? pts[pts.length - 1] : null;
+      if (!prev || Math.hypot(pt[0]-prev[0], pt[1]-prev[1], pt[2]-prev[2]) >= 5.0) {
+        pts.push(pt.map(v => Number(v.toFixed(2))));
+        drawScene();
+      }
+    }
+    return;
+  }
   if (!dragging) return;
   const dx = e.clientX - lastX, dy = e.clientY - lastY;
   if (Math.hypot(dx, dy) > 2) dragMoved = true;
@@ -964,21 +1857,31 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                     )
                     recipe = _default_recipe_for_device("afo", case.landmark_coords)
                 elif dev == "tf":
-                    case = generate_transtibial_limb(length_mm=240.0, proximal_radius=68.0, distal_radius=44.0, open_cuff=True, seed=7)
+                    case = generate_transfemoral_limb(open_cuff=False, seed=7)
                     aligned, qa_rep = run_scan_qa(
                         case.mesh,
                         mpt_point=case.landmark_coords["mpt"],
                         distal_point=case.landmark_coords["distal_end"],
                     )
-                    recipe = _default_recipe_for_device("tf", case.landmark_coords)
+                    aligned_landmarks = (
+                        {k: aligned.vertices[idx] for k, idx in case.landmarks.items()}
+                        if len(aligned.vertices) == len(case.mesh.vertices)
+                        else case.landmark_coords
+                    )
+                    recipe = _default_recipe_for_device("tf", aligned_landmarks)
                 else:
-                    case = generate_transtibial_limb(open_cuff=True, seed=0)
+                    case = generate_transtibial_limb(open_cuff=False, include_knee_thigh=True, seed=0)
                     aligned, qa_rep = run_scan_qa(
                         case.mesh,
                         mpt_point=case.landmark_coords["mpt"],
                         distal_point=case.landmark_coords["distal_end"],
                     )
-                    recipe = _default_recipe_for_device("tt", case.landmark_coords)
+                    aligned_landmarks = (
+                        {k: aligned.vertices[idx] for k, idx in case.landmarks.items()}
+                        if len(aligned.vertices) == len(case.mesh.vertices)
+                        else case.landmark_coords
+                    )
+                    recipe = _default_recipe_for_device("tt", aligned_landmarks)
                 recipe.scan_sha256 = mesh_sha256(aligned)
                 sid = store.create(aligned, qa_rep, recipe)
                 self._send_json({
@@ -1102,20 +2005,28 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                             trimline_fillet_mm=float(recipe.shell.get("trimline_fillet_mm", 10.0)),
                         )
                     elif recipe.device_type == "transfemoral_socket":
+                        trim_z = float(recipe.shell.get("proximal_trim_z_mm", 45.0))
+                        trimline = recipe.shell.get("trimline")
                         sh = build_tf_socket_shell(
                             res.rectified_mesh,
                             wall_distal_mm=float(recipe.shell.get("wall_distal_mm", 5.5)),
                             wall_proximal_mm=float(recipe.shell.get("wall_proximal_mm", 3.0)),
                             flexion_deg=float(recipe.alignment.get("flexion_deg", 5.0)),
                             adduction_deg=float(recipe.alignment.get("adduction_deg", 8.0)),
+                            proximal_trim_z_mm=trim_z,
+                            trimline=trimline,
                         )
                     else:
+                        trim_z = float(recipe.shell.get("proximal_trim_z_mm", 38.0))
+                        trimline = recipe.shell.get("trimline")
                         sh = build_tt_socket_shell(
                             res.rectified_mesh,
                             wall_distal_mm=float(recipe.shell.get("wall_distal_mm", 4.5)),
                             wall_proximal_mm=float(recipe.shell.get("wall_proximal_mm", 2.5)),
                             flexion_deg=float(recipe.alignment.get("flexion_deg", 5.0)),
                             adduction_deg=float(recipe.alignment.get("adduction_deg", 5.0)),
+                            proximal_trim_z_mm=trim_z,
+                            trimline=trimline,
                         )
 
                     write_binary_stl(sh.shell_mesh, out / "device_shell.stl")
@@ -1128,7 +2039,11 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                         "Recipe (.oprecipe.json)": f"/api/download/{body['session_id']}/recipe.oprecipe.json",
                     }
                     if recipe.device_type != "afo":
-                        carver = export_carver_positive(res.rectified_mesh)
+                        carver = export_carver_positive(
+                            res.rectified_mesh,
+                            proximal_trim_z_mm=trim_z,
+                            trimline=trimline,
+                        )
                         write_binary_stl(carver.positive_mesh, out / "carver_positive.stl")
                         generate_4axis_gcode_and_simulate(
                             carver.positive_mesh,
