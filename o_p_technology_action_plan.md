@@ -137,10 +137,18 @@ Phase 3: AFO Module, Safety Linter & Audit Dossier (Weeks 10–13)
 └── Auto-generate custom-device fabrication dossier (PDF + JSON audit bundle)
 
 Phase 4: Single Thin Clinician Web UI & Pilot (Weeks 14–16)
-├── Build 5-step Three.js local clinician review UI backed by op-core + .oprecipe.json
-└── Run EXP-6 (Timed usability crossover against ufit-blender baseline)
-   [v0.2 Post-MVP Backlog: CalculiX op-fea calibrated on physical coupons, Blender Workspace adapter, 4-axis G-code CAM, OpenCap gait bridge]
+├── Build 5-step WebGL local clinician review UI backed by op-core + .oprecipe.json  [DONE]
+└── Run EXP-6 (Timed usability crossover against ufit-blender baseline)              [CLINICAL PILOT PENDING]
+
+v0.2 Software Modules (Completed)
+├── CalculiX op-fea subprocess wrapper & ISO 10328 deck generator (src/op_fea/)     [DONE — coupon calibration pending]
+├── Standalone Blender 3.6/4.0+ workspace bridge (adapters/blender_op_bridge.py)    [DONE]
+├── 4-axis rotary foam-carver G-code & ball-nose simulator (carver_cam.py / EXP-5B) [DONE]
+├── Pure-Python 3D ICP scan comparison & volume tracking (metrology.py)             [DONE]
+└── OpenCap / OpenSim .mot gait kinematics & load-sizing bridge (gait_bridge.py)    [DONE]
 ```
+
+> **Remaining Field & External Validation Items:** External `OpenLimbTT`/`OpenLimbTF` download & testing (`scripts/fetch_openlimb.py`), desktop OrcaSlicer/PrusaSlicer `.3mf` visual verification, physical Z-peel coupon calibration for `op_fea`, and the `EXP-6` human clinician usability crossover study.
 
 ---
 

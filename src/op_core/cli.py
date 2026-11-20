@@ -6,10 +6,13 @@ import argparse
 import json
 from pathlib import Path
 
+from .accel import probe_backends
 from .carver_cam import generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
+from .gait_bridge import analyze_gait_mot
 from .linter import export_fabrication_dossier, lint_device
 from .mesh import read_stl, write_binary_stl
+from .metrology import compare_scans
 from .recipe import OpRecipe, diff_recipes, mesh_sha256
 from .rectify import apply_recipe
 from .scan_qa import run_scan_qa
@@ -105,6 +108,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "  op-core lint ./out/device_shell.stl --min-wall-mm 2.5\n"
             "  op-core diff v1.oprecipe.json v2.oprecipe.json\n"
             "  op-core cam ./out/carver_positive.stl --out-gcode ./out/carver.gcode\n"
+            "  op-core compare visit1.stl visit2.stl --out-stl visit2_aligned.stl\n"
+            "  op-core gait examples/sample_gait.mot --side left --body-mass-kg 80\n"
+            "  op-core doctor\n"
             "  op-core ui --port 8765\n\n"
             "Docs: see docs/getting_started.md and docs/cli_and_tools_reference.md"
         ),
@@ -210,6 +216,35 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cam.add_argument("positive_stl", help="Path to carver_positive.stl (or rectified positive STL)")
     p_cam.add_argument("--out-gcode", required=True, help="Output .gcode / .nc file path")
     p_cam.add_argument("--ball-radius-mm", type=float, default=4.0, help="Ball-nose cutter radius in mm (default: 4.0)")
+
+    p_cmp = sub.add_parser(
+        "compare",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="ICP-align two scans and report surface RMSE and limb volume change",
+        description="Align a follow-up scan onto a baseline scan via 3D ICP and compute limb maturation volume delta.",
+        epilog="Example:\n  op-core compare visit1.stl visit2.stl --out-stl visit2_aligned.stl",
+    )
+    p_cmp.add_argument("baseline_stl", help="Baseline .stl scan")
+    p_cmp.add_argument("followup_stl", help="Follow-up or rectified .stl scan")
+    p_cmp.add_argument("--out-stl", help="Optional path to save ICP-aligned follow-up STL")
+
+    p_gait = sub.add_parser(
+        "gait",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="Analyze OpenCap/OpenSim .mot kinematics for O&P alignment and ISO 10328 load sizing",
+        description="Parse OpenCap/OpenSim .mot gait curves and output asymmetry, foot-drop, and ISO 10328 force sizing.",
+        epilog="Example:\n  op-core gait examples/sample_gait.mot --side left --body-mass-kg 80",
+    )
+    p_gait.add_argument("mot_file", help="Path to OpenCap/OpenSim .mot or .sto file")
+    p_gait.add_argument("--side", choices=["left", "right"], default="left", help="Affected side (default: left)")
+    p_gait.add_argument("--body-mass-kg", type=float, default=80.0, help="Patient body mass in kg (default: 80.0)")
+
+    sub.add_parser(
+        "doctor",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="Report installed optional [accel] Python packages and external CAD/CAM/FEA binaries",
+        description="Inspect optional accelerators (numpy, scipy, trimesh, manifold3d, ampscan) and external binaries (ccx, gmsh, slicers, blender).",
+    )
 
     p_ui = sub.add_parser(
         "ui",
@@ -366,8 +401,49 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2))
         return 0 if cam_res.max_gouge_mm == 0.0 and cam_res.mandrel_collisions == 0 else 1
 
+    if args.cmd == "compare":
+        m_base = read_stl(args.baseline_stl)
+        m_fol = read_stl(args.followup_stl)
+        res = compare_scans(m_base, m_fol, align_icp=True)
+        if args.out_stl:
+            write_binary_stl(res.aligned_followup, args.out_stl)
+        print(json.dumps({
+            "rmse_mm": round(res.rmse_mm, 3),
+            "mean_signed_dev_mm": round(res.mean_signed_dev_mm, 3),
+            "max_abs_dev_mm": round(res.max_abs_dev_mm, 3),
+            "baseline_volume_ml": round(res.baseline_volume_ml, 1),
+            "followup_volume_ml": round(res.followup_volume_ml, 1),
+            "volume_change_pct": round(res.volume_change_pct, 2),
+            "icp_iterations": res.icp_iterations,
+        }, indent=2))
+        return 0
+
+    if args.cmd == "gait":
+        rep = analyze_gait_mot(args.mot_file, affected_side=args.side, body_mass_kg=args.body_mass_kg)
+        print(json.dumps({
+            "affected_side": rep.affected_side,
+            "duration_s": round(rep.duration_s, 3),
+            "sample_count": rep.sample_count,
+            "peak_knee_flexion_affected_deg": round(rep.peak_knee_flexion_affected_deg, 2),
+            "peak_knee_flexion_contralateral_deg": round(rep.peak_knee_flexion_contralateral_deg, 2),
+            "knee_flexion_asymmetry_pct": round(rep.knee_flexion_asymmetry_pct, 1),
+            "min_ankle_angle_affected_deg": round(rep.min_ankle_angle_affected_deg, 2),
+            "peak_vertical_grf_bw": round(rep.peak_vertical_grf_bw, 2),
+            "recommended_iso10328_force_n": round(rep.recommended_iso10328_force_n, 1),
+            "recommendations": rep.recommendations,
+        }, indent=2))
+        return 0
+
+    if args.cmd == "doctor":
+        print(json.dumps(probe_backends().to_dict(), indent=2))
+        return 0
+
     if args.cmd == "ui":
         serve_ui(host=args.host, port=args.port, open_browser=not args.no_browser)
         return 0
 
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

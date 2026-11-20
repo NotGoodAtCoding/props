@@ -77,6 +77,27 @@ Generates GRBL/LinuxCNC-compatible 4-axis rotary foam-carver G-code (`X`, `Z`, `
 PYTHONPATH=src python3 -m op_core.cli cam ./demo_tt/carver_positive.stl --out-gcode ./demo_tt/carver.gcode --ball-radius-mm 4.0
 ```
 
+### `op-core compare`
+Rigidly registers a follow-up scan onto a baseline scan via 3D ICP and reports signed surface deviation and limb volume change (`%`).
+
+```bash
+PYTHONPATH=src python3 -m op_core.cli compare visit1.stl visit2.stl --out-stl visit2_aligned.stl
+```
+
+### `op-core gait`
+Parses OpenCap / OpenSim `.mot` kinematics and GRF tables to flag asymmetry, plantarflexion drop-foot, and ISO 10328 peak load sizing.
+
+```bash
+PYTHONPATH=src python3 -m op_core.cli gait examples/sample_gait.mot --side left --body-mass-kg 80
+```
+
+### `op-core doctor`
+Reports available optional `[accel]` Python packages (`numpy`, `scipy`, `trimesh`, `manifold3d`, `ampscan`) and external binaries (`ccx`, `gmsh`, slicers, `blender`).
+
+```bash
+PYTHONPATH=src python3 -m op_core.cli doctor
+```
+
 ---
 
 ## 2. Experiment & Benchmark Runner (`scripts/run_experiments.py`)
@@ -107,6 +128,9 @@ PYTHONPATH=src python3 scripts/run_experiments.py --exp EXP-1
 | :--- | :--- | :--- |
 | [`ui_server.py`](../src/op_core/ui_server.py) | Local WebGL 3D workstation & REST API (`SessionStore`, Moller-Trumbore picking) | `serve_ui()`, `create_server()` |
 | [`repair.py`](../src/op_core/repair.py) | Real-scan vertex welding, winding consistency repair, hole filling, Z-clipping | `repair_scan_mesh()`, `weld_and_clean()`, `fix_consistent_winding()`, `fill_small_holes()`, `clip_mesh_z()` |
+| [`metrology.py`](../src/op_core/metrology.py) | 3D Horn/ICP registration, signed surface heatmaps, volume change & `ampscan` probe | `compare_scans()`, `icp_align_scans()`, `horn_rigid_transform()`, `has_ampscan()` |
+| [`gait_bridge.py`](../src/op_core/gait_bridge.py) | OpenCap / OpenSim `.mot` kinematics & ISO 10328 load sizing bridge | `analyze_gait_mot()`, `parse_opensim_mot()` |
+| [`accel.py`](../src/op_core/accel.py) | Capability probe for optional `[accel]` packages and external binaries | `probe_backends()`, `BackendStatus` |
 | [`scan_qa.py`](../src/op_core/scan_qa.py) | Chairside scan triage, canonical alignment, landmark-anchored tape check | `run_scan_qa()`, `align_canonical_limb()`, `measure_circumferences()`, `prune_floaters()`, `classify_boundary_loops()`, `detect_double_walls()`, `detect_seam_step()` |
 | [`recipe.py`](../src/op_core/recipe.py) | `.oprecipe.json` v0.1 validation, landmark resolution, diffing | `OpRecipe`, `LandmarkRef`, `diff_recipes()`, `mesh_sha256()` |
 | [`rectify.py`](../src/op_core/rectify.py) | Non-destructive `M_0` geodesic rectification & AFO posture neutralization | `apply_recipe()`, `apply_afo_posture()`, `RectificationResult` |
@@ -115,6 +139,7 @@ PYTHONPATH=src python3 scripts/run_experiments.py --exp EXP-1
 | [`export_3mf.py`](../src/op_core/export_3mf.py) | Slicer-targeted `.3mf` writer embedding reinforcement modifier meshes | `export_3mf()` (`target="orcaslicer"` or `"prusaslicer"`) |
 | [`linter.py`](../src/op_core/linter.py) | Pre-print structural safety checks & archival JSON/MD/PDF dossier export | `lint_device()`, `estimate_min_wall_thickness_mm()`, `export_fabrication_dossier()`, `export_fabrication_dossier_pdf()` |
 | [`src/op_fea/`](../src/op_fea/__init__.py) | Isolated CalculiX/Gmsh subprocess wrapper (`GPL` boundary outside MIT `op-core`) | `generate_iso10328_inp()`, `run_calculix_precheck()`, `parse_calculix_dat()` |
+| [`adapters/blender_op_bridge.py`](../adapters/blender_op_bridge.py) | Standalone Blender 3.6/4.0+ clinical workspace & CLI bridge (`GPL` boundary) | `build_cli_command()`, `run_op_core_subprocess()`, `workspaces_to_hide()` |
 | [`mesh.py`](../src/op_core/mesh.py) | Pure-Python triangle mesh, manifold audit, Dijkstra geodesics, STL I/O | `TriMesh`, `read_stl()`, `write_binary_stl()` |
 | [`math3d.py`](../src/op_core/math3d.py) | 3D vectors, Rodrigues rotation, 3×3 Jacobi PCA, 2D convex hull | `rodrigues_rotate()`, `jacobi_eigen_3x3()`, `convex_hull_2d()`, `smoothstep5()` |
 | [`synthetic.py`](../src/op_core/synthetic.py) | Procedural TT residual limbs, plantarflexed feet, and artifact injection | `generate_transtibial_limb()`, `generate_foot_ankle_mesh()`, `corrupt_scan()` |

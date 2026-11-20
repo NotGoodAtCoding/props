@@ -14,6 +14,7 @@ from op_core.carver_cam import generate_4axis_gcode_and_simulate
 from op_core.export_3mf import export_3mf
 from op_core.linter import lint_device
 from op_core.math3d import rodrigues_rotate, v_dist, v_dot, v_sub
+from op_core.metrology import compare_scans
 from op_core.recipe import OpRecipe
 from op_core.rectify import apply_afo_posture, apply_recipe
 from op_core.repair import repair_scan_mesh
@@ -50,14 +51,32 @@ def run_exp1() -> dict:
         if bad_rep.status == "FAIL" and bad_rep.internal_tear_loops >= 1 and bad_rep.double_wall_vertices > 15:
             detected_corruptions += 1
 
+    # EXP-1B: 3D ICP alignment + limb volume atrophy tracking
+    base_0 = generate_transtibial_limb(open_cuff=True, seed=0).mesh
+    moved_0 = base_0.transformed(
+        lambda p: (q[0] + 5.0, q[1] - 3.0, q[2] + 8.0)
+        if (q := rodrigues_rotate(p, (1.0, 0.2, 0.0), math.radians(10.0)))
+        else p
+    )
+    icp_res = compare_scans(base_0, moved_0, align_icp=True)
+    atrophy_res = compare_scans(base_0, base_0.transformed(lambda p: (p[0] * 0.96, p[1] * 0.96, p[2])), align_icp=True)
+
     dt = time.perf_counter() - t0
     mean_err = sum(errors) / len(errors)
     return {
         "mean_circumference_err_mm": round(mean_err, 3),
         "max_circumference_err_mm": round(max(errors), 3),
         "corrupted_detection_rate": f"{detected_corruptions}/5",
+        "exp1b_icp_rmse_mm": round(icp_res.rmse_mm, 3),
+        "exp1b_atrophy_vol_change_pct": round(atrophy_res.volume_change_pct, 2),
         "elapsed_s": round(dt, 3),
-        "pass": mean_err <= 1.5 and detected_corruptions == 5 and dt < 25.0,
+        "pass": (
+            mean_err <= 1.5
+            and detected_corruptions == 5
+            and icp_res.rmse_mm < 0.5
+            and atrophy_res.volume_change_pct < -5.0
+            and dt < 25.0
+        ),
     }
 
 

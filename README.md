@@ -73,9 +73,10 @@ PYTHONPATH=src python3 -m op_core.cli --help
 | [**Validation Experiments**](./experiments/high_value_experiments.md) | Hypotheses, datasets, protocols, and quantitative pass/fail gates for `EXP-1` through `EXP-6`. |
 
 ### Code & Verification
-* **Core Package:** [`src/op_core/`](./src/op_core/__init__.py) (`ui_server`, `cli`, `scan_qa`, `repair`, `recipe`, `rectify`, `shell`, `carver_cam`, `export_3mf`, `linter`, `mesh`, `math3d`, `synthetic`).
-* **Subprocess FEA Package (`GPL` boundary):** [`src/op_fea/`](./src/op_fea/__init__.py) (`CalculiX` ISO 10328 `.inp` generator & `.dat` parser, isolated from MIT `op-core`).
-* **Unit Tests (`31` tests):** `PYTHONPATH=src python3 -m unittest discover -s tests -v`
+* **Core Package:** [`src/op_core/`](./src/op_core/__init__.py) (`ui_server`, `cli`, `scan_qa`, `repair`, `metrology`, `recipe`, `rectify`, `shell`, `carver_cam`, `export_3mf`, `linter`, `gait_bridge`, `accel`, `mesh`, `math3d`, `synthetic`).
+* **Subprocess FEA & Blender Adapters (`GPL` boundary):** [`src/op_fea/`](./src/op_fea/__init__.py) (`CalculiX` ISO 10328 `.inp`/`.dat`), [`adapters/blender_op_bridge.py`](./adapters/blender_op_bridge.py) (Blender 3.6/4.0+ clinical workspace bridge).
+* **Unit Tests (`38` tests):** `PYTHONPATH=src python3 -m unittest discover -s tests -v`
 * **Experiment Runner (`EXP-1`–`EXP-5B`):** `PYTHONPATH=src python3 scripts/run_experiments.py`
 * **External Dataset Fetcher:** `PYTHONPATH=src python3 scripts/fetch_openlimb.py --help`
+* **Gait Example:** [`examples/sample_gait.mot`](./examples/sample_gait.mot) (`op-core gait examples/sample_gait.mot`)
 * **License:** [`LICENSE`](./LICENSE) (MIT).
