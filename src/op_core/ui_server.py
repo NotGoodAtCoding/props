@@ -326,9 +326,11 @@ _HTML_PAGE = r"""<!DOCTYPE html>
     <div class="hud-top">
       <div class="hud-card" id="meshHud">No mesh loaded</div>
       <div class="hud-card row">
-        <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
-          <input type="checkbox" id="chkWire" onchange="drawScene()" /> Wireframe
-        </label>
+        <select id="renderMode" onchange="drawScene()" style="width:auto; padding:4px 8px;">
+          <option value="solid">Solid Shaded</option>
+          <option value="solid_wire">Solid + Wireframe</option>
+          <option value="wire_only">Wireframe Only</option>
+        </select>
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" id="chkLandmarks" checked onchange="drawScene()" /> Landmarks
         </label>
@@ -590,9 +592,10 @@ function renderDownloads() {
 const canvas = document.getElementById('glCanvas');
 const gl = canvas.getContext('webgl', { antialias: true });
 const extUint = gl ? gl.getExtension('OES_element_index_uint') : null;
-let prog = null, lineProg = null, vboPos = null, vboNorm = null, vboCol = null, ibo = null;
-let vboOvPos = null, vboOvCol = null, indexCount = 0;
+let prog = null, lineProg = null, vboPos = null, vboNorm = null, vboCol = null, ibo = null, iboWire = null;
+let vboOvPos = null, vboOvCol = null, indexCount = 0, wireIndexCount = 0;
 let indexType = gl ? gl.UNSIGNED_SHORT : 0;
+let wireIndexType = gl ? gl.UNSIGNED_SHORT : 0;
 let lastMVP = null;
 
 function initGL() {
@@ -613,13 +616,25 @@ function initGL() {
     precision mediump float;
     varying vec3 vNorm;
     varying vec3 vCol;
-    uniform vec3 uLightDir;
+    uniform vec3 uKeyLightDir;
+    uniform vec3 uFillLightDir;
+    uniform vec3 uViewDir;
     uniform float uWire;
     void main() {
-      if (uWire > 0.5) { gl_FragColor = vec4(0.15, 0.7, 0.95, 0.6); return; }
+      if (uWire > 1.5) {
+        gl_FragColor = vec4(mix(vCol, vec3(0.32, 0.84, 1.0), 0.55), 1.0);
+        return;
+      }
+      if (uWire > 0.5) {
+        gl_FragColor = vec4(0.14, 0.58, 0.82, 1.0);
+        return;
+      }
       vec3 n = normalize(vNorm);
-      float diff = max(abs(dot(n, uLightDir)), 0.15);
-      vec3 lit = vCol * (0.28 + 0.72 * diff);
+      float diffKey = abs(dot(n, uKeyLightDir));
+      float diffFill = abs(dot(n, uFillLightDir));
+      vec3 halfVec = normalize(uKeyLightDir + uViewDir);
+      float spec = pow(abs(dot(n, halfVec)), 16.0) * 0.14;
+      vec3 lit = vCol * (0.24 + 0.58 * diffKey + 0.22 * diffFill) + vec3(spec);
       gl_FragColor = vec4(lit, 1.0);
     }`;
   const lvs = `
@@ -650,6 +665,7 @@ function initGL() {
   vboNorm = gl.createBuffer();
   vboCol = gl.createBuffer();
   ibo = gl.createBuffer();
+  iboWire = gl.createBuffer();
   vboOvPos = gl.createBuffer();
   vboOvCol = gl.createBuffer();
 }
@@ -689,6 +705,32 @@ function uploadMeshToGL() {
     indexType = gl.UNSIGNED_SHORT;
   }
   indexCount = m.indices.length;
+
+  // Build deduplicated unique edge list from triangles for clean wireframe rendering
+  const seenEdges = new Set();
+  const wireIndices = [];
+  for (let i = 0; i < m.indices.length; i += 3) {
+    const a = m.indices[i], b = m.indices[i + 1], c = m.indices[i + 2];
+    const pairs = [[a, b], [b, c], [c, a]];
+    for (const [p0, p1] of pairs) {
+      const lo = p0 < p1 ? p0 : p1;
+      const hi = p0 < p1 ? p1 : p0;
+      const key = lo * nVerts + hi;
+      if (!seenEdges.has(key)) {
+        seenEdges.add(key);
+        wireIndices.push(lo, hi);
+      }
+    }
+  }
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, iboWire);
+  if (extUint && nVerts > 65535) {
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(wireIndices), gl.STATIC_DRAW);
+    wireIndexType = gl.UNSIGNED_INT;
+  } else {
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(wireIndices), gl.STATIC_DRAW);
+    wireIndexType = gl.UNSIGNED_SHORT;
+  }
+  wireIndexCount = wireIndices.length;
   drawScene();
 }
 
@@ -751,8 +793,24 @@ function drawScene() {
   const camInfo = computeMVP(w / Math.max(1, h));
   lastMVP = camInfo;
   gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'uMVP'), false, camInfo.mvp);
-  gl.uniform3f(gl.getUniformLocation(prog, 'uLightDir'), 0.45, 0.65, 0.60);
-  gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), 0.0);
+
+  // Camera-locked lighting basis: always illuminate facing the camera view across orbit angles
+  const { f, r, u } = camInfo;
+  function norm3(v) { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; }
+  const viewDir = [-f[0], -f[1], -f[2]];
+  const keyDir = norm3([
+    viewDir[0] * 0.80 + r[0] * 0.42 + u[0] * 0.44,
+    viewDir[1] * 0.80 + r[1] * 0.42 + u[1] * 0.44,
+    viewDir[2] * 0.80 + r[2] * 0.42 + u[2] * 0.44,
+  ]);
+  const fillDir = norm3([
+    viewDir[0] * 0.65 - r[0] * 0.52 - u[0] * 0.28,
+    viewDir[1] * 0.65 - r[1] * 0.52 - u[1] * 0.28,
+    viewDir[2] * 0.65 - r[2] * 0.52 - u[2] * 0.28,
+  ]);
+  gl.uniform3f(gl.getUniformLocation(prog, 'uKeyLightDir'), keyDir[0], keyDir[1], keyDir[2]);
+  gl.uniform3f(gl.getUniformLocation(prog, 'uFillLightDir'), fillDir[0], fillDir[1], fillDir[2]);
+  gl.uniform3f(gl.getUniformLocation(prog, 'uViewDir'), viewDir[0], viewDir[1], viewDir[2]);
 
   const locP = gl.getAttribLocation(prog, 'aPos');
   gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
@@ -769,11 +827,23 @@ function drawScene() {
   gl.enableVertexAttribArray(locC);
   gl.vertexAttribPointer(locC, 3, gl.FLOAT, false, 0, 0);
 
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-  gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
-  if (document.getElementById('chkWire').checked) {
-    gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), 1.0);
-    gl.drawElements(gl.LINES, indexCount, indexType, 0);
+  const renderMode = document.getElementById('renderMode').value;
+  if (renderMode !== 'wire_only') {
+    if (renderMode === 'solid_wire') {
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(1.0, 1.0);
+    }
+    gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), 0.0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
+    if (renderMode === 'solid_wire') {
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+    }
+  }
+  if ((renderMode === 'solid_wire' || renderMode === 'wire_only') && wireIndexCount > 0) {
+    gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), renderMode === 'wire_only' ? 2.0 : 1.0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, iboWire);
+    gl.drawElements(gl.LINES, wireIndexCount, wireIndexType, 0);
   }
   drawOverlays(camInfo.mvp);
 }
