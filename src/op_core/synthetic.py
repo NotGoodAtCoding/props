@@ -354,116 +354,244 @@ def generate_foot_ankle_mesh(
     inversion_deg: float = 5.0,
     calf_height_mm: float = 240.0,
     foot_length_mm: float = 230.0,
-    n_rings: int = 48,
-    n_seg: int = 56,
+    n_rings: int = 56,
+    n_seg: int = 60,
 ) -> SyntheticLimbCase:
-    """Generate an anatomically contoured lower-leg + ankle + foot mesh with configurable plantarflexion/inversion."""
+    """Generate an anatomically shaped lower-leg, heel, ankle, and foot mesh.
+
+    Uses a non-self-intersecting external-pivot ankle-heel fan sweep bridging horizontal
+    lower-leg rings cleanly into coronal foot cross-sections with a projecting calcaneus,
+    Achilles concavity, offset malleoli, flat weight-bearing sole, medial longitudinal arch,
+    oblique metatarsal flare, and asymmetrical rounded toe box.
+    """
     vertices: list[Vec3] = []
     faces: list[Tri] = []
 
-    # Parameter u in [0, 1]: 0..0.54 covers gastrocnemius shank to supramalleolar ankle;
-    # 0.54..1.0 curves around calcaneal heel pad through medial arch & metatarsal flare to toe box.
-    for r in range(n_rings):
-        u = r / (n_rings - 1)
-        if u <= 0.54:
-            t = u / 0.54
-            cx, cy, cz = 0.0, 0.0, calf_height_mm * (1.0 - t) + 52.0 * t
-            calf_swell = 7.5 * math.exp(-((t - 0.28) / 0.24) ** 2)
-            ankle_narrow = -6.0 * math.exp(-((t - 0.86) / 0.18) ** 2)
-            rx = 43.0 * (1.0 - 0.24 * t) + 0.55 * calf_swell + 0.65 * ankle_narrow
-            ry = 46.0 * (1.0 - 0.26 * t) + calf_swell + ankle_narrow
-            axis_dir = (0.0, 0.0, -1.0)
-        else:
-            t = (u - 0.54) / 0.46
-            ang = min(math.pi * 0.5, t * (math.pi * 0.68))
-            cy = -16.0 * math.sin(math.pi * min(1.0, t * 1.15)) + (foot_length_mm * 0.72) * (t ** 1.18)
-            cz = 52.0 * math.cos(ang) + 21.0 * (1.0 - math.cos(ang))
-            cx = 2.0 * math.sin(math.pi * t)
-            heel_pad = 3.5 * math.exp(-((t - 0.16) / 0.12) ** 2)
-            met_flare = 10.5 * math.exp(-((t - 0.74) / 0.16) ** 2)
-            toe_taper = 1.0 - 0.42 * max(0.0, (t - 0.82) / 0.18) ** 1.4
-            rx = (34.0 + heel_pad + met_flare) * toe_taper
-            ry = max(9.5, 29.0 * (1.0 - 0.42 * t) - 7.5 * max(0.0, (t - 0.78) / 0.22))
-            axis_dir = (0.0, math.sin(ang), -math.cos(ang))
+    def _smooth5(x: float) -> float:
+        x = max(0.0, min(1.0, x))
+        return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
 
-        # Offset medial (-X, higher & slightly anterior) vs lateral (+X, lower & posterolateral) malleoli
-        med_mal = 6.2 * math.exp(-((u - 0.51) / 0.038) ** 2)
-        lat_mal = 6.0 * math.exp(-((u - 0.545) / 0.038) ** 2)
+    def _spow(val: float, exp: float) -> float:
+        return math.copysign(abs(val) ** exp, val)
 
-        e_x = (1.0, 0.0, 0.0)
-        e_y = (0.0, -axis_dir[2], axis_dir[1])
+    scale_f = foot_length_mm / 230.0
+    y_piv = 46.0
+    z_piv = 84.0
+    y_toe_end = 186.0 * scale_f
+
+    n_shank = max(14, n_rings // 3)
+    n_fan = max(14, n_rings // 3)
+    n_foot = max(18, n_rings - n_shank - n_fan + 2)
+
+    def _apply_deform(pt: Vec3, deform_w: float) -> Vec3:
+        if deform_w <= 1e-6:
+            return pt
+        out = pt
+        if plantarflexion_deg != 0.0:
+            out = rodrigues_rotate(
+                out,
+                axis=(1.0, 0.0, 0.0),
+                angle_rad=math.radians(-plantarflexion_deg * deform_w),
+                origin=(0.0, 0.0, 58.0),
+            )
+        if inversion_deg != 0.0:
+            out = rodrigues_rotate(
+                out,
+                axis=(0.0, 1.0, 0.0),
+                angle_rad=math.radians(inversion_deg * deform_w),
+                origin=(0.0, 0.0, 58.0),
+            )
+        return out
+
+    ring_count = 0
+
+    # --- Section 1: Vertical lower leg (calf belly down to supramalleolar ankle z = z_piv) ---
+    for r in range(n_shank):
+        t = r / (n_shank - 1)  # 0 at proximal calf top, 1 at z = z_piv (84 mm)
+        z = calf_height_mm * (1.0 - t) + z_piv * t
+        calf_w = math.exp(-((t - 0.28) / 0.26) ** 2)
+        end_fade = 1.0 - _smooth5((t - 0.72) / 0.28)
+        y_front = 29.0 + 17.0 * (1.0 - t)
+        y_back = -(27.0 + 18.0 * (1.0 - t) + 12.0 * calf_w * end_fade)
+        half_w = 31.0 + 14.0 * (1.0 - t) + 6.5 * calf_w * end_fade
+
+        # Smoothly match ankle center/radii at t = 1: y in [-27, +29], x in [-31, +31]
+        cy = 0.5 * (y_front + y_back)
+        ry = 0.5 * (y_front - y_back)
+        rx = half_w
+
+        achilles_w = math.exp(-((t - 0.94) / 0.16) ** 2)
+        deform_w = _smooth5((t - 0.85) / 0.15) * 0.15
+
+        for s in range(n_seg):
+            theta = 2.0 * math.pi * s / n_seg
+            ct, st = math.cos(theta), math.sin(theta)
+            # Anterior tibial crest ridge down front of lower shank
+            shin_ridge = 3.0 * end_fade * math.exp(-((st - 1.0) ** 2) / 0.06) * math.exp(-((t - 0.42) / 0.34) ** 2)
+            # Subtle bi-lobed gastrocnemius calf contour posteriorly
+            calf_lobes = (
+                4.5
+                * calf_w
+                * end_fade
+                * (
+                    math.exp(-((st + 0.92) ** 2 + (ct + 0.38) ** 2) / 0.24)
+                    + math.exp(-((st + 0.92) ** 2 + (ct - 0.38) ** 2) / 0.24)
+                )
+            )
+            # Retromalleolar hollows flanking the Achilles tendon near distal shank
+            pinch = -4.5 * achilles_w * math.exp(-((abs(ct) - 0.68) ** 2 + (st + 0.72) ** 2) / 0.14)
+            ach_ridge = 2.6 * achilles_w * math.exp(-((st + 1.0) ** 2) / 0.06)
+
+            px = (rx + pinch) * ct
+            py = cy + (ry + shin_ridge + calf_lobes + ach_ridge) * st
+            vertices.append(_apply_deform((px, py, z), deform_w))
+        ring_count += 1
+
+    # --- Section 2: External-pivot ankle & heel fan sweep (alpha: 0 -> pi/2 around (0, y_piv, z_piv)) ---
+    for r in range(1, n_fan):
+        sf = r / (n_fan - 1)  # (0, 1]
+        alpha = sf * (math.pi * 0.5)
+        ca, sa = math.cos(alpha), math.sin(alpha)
+        # e_y points anterior/dorsal (+Y at alpha=0, +Z at alpha=pi/2)
+        ey_y, ey_z = ca, sa
+
+        # Distance from external pivot (y_piv, z_piv) to anterior/dorsal skin (always >= 17 mm -> zero self-intersection)
+        d_front = 17.0 + 7.0 * _smooth5(sf) + 1.2 * math.sin(math.pi * sf)
+
+        # Posterior Achilles curves out to calcaneal tuberosity (y = -46) and rounds smoothly onto flat sole z = 0
+        y_post_wall = -27.0 - 19.0 * _smooth5(sf / 0.44)
+        d_wall = (y_piv - y_post_wall) / max(0.04, ca)
+        d_floor = z_piv / max(0.04, sa)
+        p_norm = 7.5
+        d_back = (d_wall ** (-p_norm) + d_floor ** (-p_norm)) ** (-1.0 / p_norm)
+
+        d_mid = 0.5 * (d_front + d_back)
+        r_dp = 0.5 * (d_back - d_front)
+
+        # Smooth mediolateral transition from ankle (-31..+31) through heel pad (-32..+33) to midfoot (-31.5..+35.5)
+        x_med = -(31.0 + 1.5 * math.sin(math.pi * sf) + 0.5 * _smooth5(sf))
+        x_lat = 31.0 + 2.0 * math.sin(math.pi * sf) + 4.5 * _smooth5(sf)
+        cx = 0.5 * (x_med + x_lat)
+        rx = 0.5 * (x_lat - x_med)
+
+        # Offset anatomical malleoli: medial (-X) higher/anterior; lateral (+X) lower/posterior
+        med_mal = 6.2 * math.exp(-((sf - 0.18) / 0.09) ** 2)
+        lat_mal = 6.0 * math.exp(-((sf - 0.30) / 0.09) ** 2)
+        ach_w = math.exp(-(sf / 0.22) ** 2)
+        sole_flat_w = _smooth5((sf - 0.36) / 0.50)
+        arch_start_w = _smooth5((sf - 0.72) / 0.28)
+        deform_w = 0.15 + 0.85 * _smooth5(sf / 0.50)
 
         for s in range(n_seg):
             theta = 2.0 * math.pi * s / n_seg
             ct, st = math.cos(theta), math.sin(theta)
 
             mal_boost = (
-                med_mal * math.exp(-((ct + 0.96) ** 2 + (st - 0.14) ** 2) / 0.16)
+                med_mal * math.exp(-((ct + 0.96) ** 2 + (st - 0.16) ** 2) / 0.16)
                 + lat_mal * math.exp(-((ct - 0.96) ** 2 + (st + 0.18) ** 2) / 0.16)
             )
+            pinch = -4.5 * ach_w * math.exp(-((abs(ct) - 0.68) ** 2 + (st + 0.72) ** 2) / 0.14)
+            ach_ridge = 2.6 * ach_w * math.exp(-((st + 1.0) ** 2) / 0.06)
 
-            achilles_w = math.exp(-((u - 0.48) / 0.08) ** 2)
-            perimalleolar_pinch = -5.8 * achilles_w * math.exp(-((abs(ct) - 0.70) ** 2 + (st + 0.70) ** 2) / 0.14)
-            achilles_ridge = 3.2 * achilles_w * math.exp(-((st + 1.0) ** 2) / 0.06)
+            # Superellipse plantar flattening on heel contact pad & midfoot transition
+            st_shaped = _spow(st, 1.0 - 0.28 * sole_flat_w) if st < 0.0 else st
+            ct_shaped = _spow(ct, 1.0 - 0.12 * sole_flat_w)
 
-            shin_ridge = (
-                2.8
-                * math.exp(-((st - 1.0) ** 2) / 0.06)
-                * math.exp(-((u - 0.25) / 0.20) ** 2)
-                if u < 0.52
-                else 0.0
-            )
-            calf_post = (
-                5.5 * math.exp(-((st + 1.0) ** 2) / 0.30) * math.exp(-((u - 0.16) / 0.13) ** 2)
-                if u < 0.45
-                else 0.0
-            )
+            # Medial longitudinal arch begins rising smoothly near y ~ 46 (sf -> 1.0)
+            arch_lift = 0.0
+            if st < 0.0 and arch_start_w > 0.0:
+                arch_lift = 5.5 * arch_start_w * (max(0.0, -ct) ** 1.15) * (-st)
 
-            dx = (rx + mal_boost + perimalleolar_pinch) * ct
-            dy = (ry + shin_ridge + calf_post + achilles_ridge) * st
+            # Gentle lateral dorsal slope matching coronal instep at sf = 1
+            dorsal_slope = 0.0
+            if st > 0.0:
+                dorsal_slope = -4.0 * _smooth5((sf - 0.60) / 0.40) * max(0.0, ct) * st
 
-            if u > 0.58:
-                t_f = (u - 0.58) / 0.42
-                if st < 0.0:
-                    dy *= 0.72
-                    arch_u = math.exp(-((t_f - 0.52) / 0.22) ** 2)
-                    medial_w = max(0.0, -ct) ** 1.1
-                    dy += 9.5 * arch_u * medial_w * (-st)
-                else:
-                    dy += 3.5 * math.exp(-((t_f - 0.36) / 0.25) ** 2) * (st ** 1.5) * max(0.0, 0.6 - 0.4 * ct)
+            d_ray = d_mid - (r_dp + ach_ridge) * st_shaped - arch_lift - dorsal_slope
+            px = cx + (rx + mal_boost + pinch) * ct_shaped
+            py = y_piv - d_ray * ey_y
+            pz = z_piv - d_ray * ey_z
+            vertices.append(_apply_deform((px, py, pz), deform_w))
+        ring_count += 1
 
-            px = cx + dx * e_x[0] + dy * e_y[0]
-            py = cy + dx * e_x[1] + dy * e_y[1]
-            pz = cz + dx * e_x[2] + dy * e_y[2]
+    # --- Section 3: Coronal foot slices (midfoot arch -> metatarsal flare -> asymmetrical toe box) ---
+    for r in range(1, n_foot):
+        tf = r / (n_foot - 1)  # (0, 1] from y = y_piv (46) to y_toe_end
+        y_base = y_piv + tf * (y_toe_end - y_piv)
 
-            if 0.53 < u < 0.67 and st < 0.15:
-                py -= 9.0 * math.exp(-((u - 0.59) / 0.045) ** 2) * max(0.0, -st + 0.15) * 0.75
+        # Anatomical foot planform (medial -X, lateral +X)
+        # Medial border curves slightly inward at arch waist (tf~0.25), flares to 1st MPJ (tf~0.64), full hallux
+        medial_waist = -3.0 * math.exp(-((tf - 0.24) / 0.15) ** 2)
+        mpj1_flare = 15.0 * math.exp(-((tf - 0.66) / 0.24) ** 2)
+        x_med_raw = -(31.5 + medial_waist + mpj1_flare)
+        # Lateral border flares at 5th met base/head (tf~0.52), sweeps earlier inward toward 5th toe
+        mpj5_flare = 10.5 * math.exp(-((tf - 0.52) / 0.26) ** 2)
+        x_lat_raw = 35.5 + mpj5_flare
 
-            if u > 0.80:
-                t_toe = (u - 0.80) / 0.20
-                py += t_toe * (-7.5 * ct + 2.5 * max(0.0, 1.0 - abs(ct)))
+        # Smooth rounded toe planform taper at distal forefoot (tf > 0.72)
+        if tf > 0.72:
+            tt = (tf - 0.72) / 0.28
+            med_taper = math.sqrt(max(0.06, 1.0 - 0.82 * (tt ** 2.1)))
+            lat_taper = math.sqrt(max(0.05, 1.0 - 0.90 * (tt ** 1.75)))
+            # Shift toe center slightly medially toward hallux/2nd toe apex
+            toe_cx_shift = -8.5 * _smooth5(tt)
+            x_med = toe_cx_shift + (x_med_raw - toe_cx_shift) * med_taper
+            x_lat = toe_cx_shift + (x_lat_raw - toe_cx_shift) * lat_taper
+        else:
+            x_med, x_lat = x_med_raw, x_lat_raw
 
-            pt = (px, py, pz)
+        cx = 0.5 * (x_med + x_lat)
+        rx = max(6.0, 0.5 * (x_lat - x_med))
 
-            if u > 0.45:
-                w = min(1.0, (u - 0.45) / 0.25)
-                if plantarflexion_deg != 0.0:
-                    pt = rodrigues_rotate(
-                        pt,
-                        axis=(1.0, 0.0, 0.0),
-                        angle_rad=math.radians(-plantarflexion_deg * w),
-                        origin=(0.0, 0.0, 58.0),
-                    )
-                if inversion_deg != 0.0:
-                    pt = rodrigues_rotate(
-                        pt,
-                        axis=(0.0, 1.0, 0.0),
-                        angle_rad=math.radians(inversion_deg * w),
-                        origin=(0.0, 0.0, 58.0),
-                    )
-            vertices.append(pt)
+        # Dorsal height slopes from 60 mm at ankle/instep (tf=0) down to 22 mm at met heads and rounded toes
+        z_top_base = 60.0 * ((1.0 - tf) ** 1.35) + 21.0 * (1.0 - (1.0 - tf) ** 1.35)
+        if tf > 0.80:
+            tt_z = (tf - 0.80) / 0.20
+            z_top_base *= math.sqrt(max(0.14, 1.0 - 0.78 * tt_z * tt_z))
 
-    for r in range(n_rings - 1):
+        # Subtle toe-spring rocker lift at distal toe tips (tf > 0.80)
+        z_bot_base = 3.5 * _smooth5((tf - 0.80) / 0.20)
+        cz = 0.5 * (z_top_base + z_bot_base)
+        rz = max(4.5, 0.5 * (z_top_base - z_bot_base))
+
+        # Medial longitudinal arch cavity peaks around tf ~ 0.24 (y ~ 80 mm), fading cleanly to 0 at 1st MPJ
+        arch_env = math.exp(-((tf - 0.22) / 0.20) ** 2)
+        arch_amp = 5.5 * (1.0 - _smooth5(tf / 0.14)) + 17.5 * arch_env * _smooth5(tf / 0.12)
+        # Subtle lateral longitudinal arch (~2.5 mm)
+        lat_arch = 2.5 * math.exp(-((tf - 0.26) / 0.18) ** 2)
+
+        for s in range(n_seg):
+            theta = 2.0 * math.pi * s / n_seg
+            ct, st = math.cos(theta), math.sin(theta)
+
+            # Superellipse cross-section: flat stable plantar tread, smoothly vaulted dorsum
+            st_shaped = _spow(st, 0.72) if st < 0.0 else _spow(st, 0.92)
+            ct_shaped = _spow(ct, 0.88)
+
+            px = cx + rx * ct_shaped
+            pz = cz + rz * st_shaped
+
+            if st < 0.0:
+                # Carve medial longitudinal arch upward on medial-plantar quarter (-X, st < 0)
+                med_w = max(0.0, -ct) ** 1.15
+                lat_w = max(0.0, ct) ** 1.2
+                pz += (arch_amp * med_w + lat_arch * lat_w) * (-st)
+            else:
+                # Realistic dorsal foot slope: slightly fuller medially over 1st-2nd ray, sloping down laterally
+                slope_w = 1.0 - 0.55 * tf
+                pz -= 4.0 * slope_w * max(0.0, ct) * st
+
+            # Asymmetrical oblique toe sweep: medial hallux (-X) extends farther forward than lateral 5th toe (+X)
+            py = y_base
+            if tf > 0.62:
+                t_ob = _smooth5((tf - 0.62) / 0.38)
+                py += t_ob * scale_f * (-11.0 * max(0.0, ct) ** 1.15 + 3.5 * max(0.0, -ct))
+
+            vertices.append(_apply_deform((px, py, pz), 1.0))
+        ring_count += 1
+
+    # Stitch all consecutive rings with consistent outward winding
+    for r in range(ring_count - 1):
         for s in range(n_seg):
             sn = (s + 1) % n_seg
             a = r * n_seg + s
@@ -473,28 +601,60 @@ def generate_foot_ankle_mesh(
             faces.append((a, d, c))
             faces.append((a, c, b))
 
-    # Close proximal calf dome and rounded distal toe cap cleanly
+    # Smooth proximal calf dome closure
     _close_proximal_dome(vertices, faces, n_seg, height_mm=18.0, dome_rings=4)
 
-    last_ring = (n_rings - 1) * n_seg
-    toe_center = (
-        sum(vertices[last_ring + s][0] for s in range(n_seg)) / n_seg - 4.0,
-        sum(vertices[last_ring + s][1] for s in range(n_seg)) / n_seg + 10.0,
-        sum(vertices[last_ring + s][2] for s in range(n_seg)) / n_seg - 1.5,
-    )
+    # Smooth rounded distal toe-tip dome closure (3 smooth rings -> rounded anatomical toe end)
+    last_ring = list(range((ring_count - 1) * n_seg, ring_count * n_seg))
+    tcx = sum(vertices[idx][0] for idx in last_ring) / n_seg
+    tcy = sum(vertices[idx][1] for idx in last_ring) / n_seg
+    tcz = sum(vertices[idx][2] for idx in last_ring) / n_seg
+    toe_offsets = [
+        (vertices[idx][0] - tcx, vertices[idx][1] - tcy, vertices[idx][2] - tcz)
+        for idx in last_ring
+    ]
+    prev_toe = last_ring
+    toe_dome_len = 11.0 * scale_f
+    toe_dir_p1 = _apply_deform((0.0, 1.0, 58.0), 1.0)
+    toe_dir_p0 = _apply_deform((0.0, 0.0, 58.0), 1.0)
+    tdx = toe_dir_p1[0] - toe_dir_p0[0]
+    tdy = toe_dir_p1[1] - toe_dir_p0[1]
+    tdz = toe_dir_p1[2] - toe_dir_p0[2]
+    for k in range(1, 3):
+        phi = (k / 3.0) * (math.pi * 0.5)
+        r_sc = math.cos(phi)
+        ext = toe_dome_len * math.sin(phi)
+        next_toe: list[int] = []
+        for s in range(n_seg):
+            dx, dy, dz = toe_offsets[s]
+            pt_raw = (
+                tcx + dx * r_sc + tdx * ext,
+                tcy + dy * r_sc + tdy * ext,
+                tcz + dz * r_sc + tdz * ext,
+            )
+            next_toe.append(len(vertices))
+            vertices.append(pt_raw)
+        for s in range(n_seg):
+            sn = (s + 1) % n_seg
+            a, b = prev_toe[s], prev_toe[sn]
+            c, d = next_toe[sn], next_toe[s]
+            faces.append((a, d, c))
+            faces.append((a, c, b))
+        prev_toe = next_toe
+
     toe_pole = len(vertices)
-    vertices.append(toe_center)
+    vertices.append((tcx + tdx * toe_dome_len, tcy + tdy * toe_dome_len, tcz + tdz * toe_dome_len))
     for s in range(n_seg):
         sn = (s + 1) % n_seg
-        faces.append((last_ring + s, toe_pole, last_ring + sn))
+        faces.append((prev_toe[s], toe_pole, prev_toe[sn]))
 
     mesh = TriMesh(vertices=vertices, faces=faces)
     target_coords: dict[str, Vec3] = {
-        "medial_malleolus": (-37.0, 4.0, 62.0),
-        "lateral_malleolus": (37.0, -5.0, 53.0),
-        "heel": (0.0, -28.0, 16.0),
-        "metatarsal_head": (0.0, foot_length_mm * 0.56, 8.0),
-        "proximal_calf": (0.0, -45.0, calf_height_mm - 20.0),
+        "medial_malleolus": (-36.0, 2.0, 72.0),
+        "lateral_malleolus": (36.0, -7.0, 60.0),
+        "heel": (0.0, -45.0, 18.0),
+        "metatarsal_head": (-10.0, 136.0 * scale_f, 4.0),
+        "proximal_calf": (0.0, -52.0, calf_height_mm - 45.0),
     }
     landmarks = {name: mesh.nearest_vertex(pt) for name, pt in target_coords.items()}
     return SyntheticLimbCase(

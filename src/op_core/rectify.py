@@ -97,17 +97,17 @@ def apply_afo_posture(
 
     # Plantar sole flattening at prescribed footwear heel-height pitch:
     # Heel sits at z_heel = heel_pitch_mm above forefoot contact plane z_fore = 0
-    z_vals = [v[2] for v in verts_rot if v[1] > -35.0]
+    z_vals = [v[2] for v in verts_rot if v[1] > -55.0]
     z_floor_ref = min(z_vals) if z_vals else 0.0
-    y_heel = -15.0
-    y_met = 125.0
+    y_heel = -22.0
+    y_met = 132.0
 
     verts_flat: list[Vec3] = []
     for x, y, z in verts_rot:
         t_y = max(0.0, min(1.0, (y - y_heel) / max(1.0, y_met - y_heel)))
         # Footwear sole plane drops linearly from heel_pitch_mm to 0 at met heads
         sole_target_z = z_floor_ref + heel_pitch_mm * (1.0 - t_y)
-        if z < sole_target_z + 2.5 and y > -40.0:
+        if z < sole_target_z + 2.5 and y > -55.0:
             # Smoothly project lowest plantar points onto sole plane without collapsing dorsal arch
             if z < sole_target_z:
                 z = sole_target_z
