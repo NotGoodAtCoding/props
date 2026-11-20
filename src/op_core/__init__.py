@@ -1,5 +1,6 @@
 """Headless MIT computational geometry kernel for open-source O&P CAD/CAM."""
 
+from .accel import BackendStatus, probe_backends
 from .carver_cam import CarverCamResult, generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
 from .gait_bridge import GaitClinicalSummary, GaitTable, analyze_gait_mot, parse_opensim_mot
@@ -28,6 +29,7 @@ from .shell import (
 )
 
 __all__ = [
+    "BackendStatus",
     "CarverCamResult",
     "CarverPositiveResult",
     "GaitClinicalSummary",
@@ -65,6 +67,7 @@ __all__ = [
     "measure_circumferences",
     "mesh_sha256",
     "parse_opensim_mot",
+    "probe_backends",
     "read_stl",
     "repair_scan_mesh",
     "run_scan_qa",

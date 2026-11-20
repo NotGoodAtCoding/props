@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .accel import probe_backends
 from .carver_cam import generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
 from .gait_bridge import analyze_gait_mot
@@ -109,6 +110,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  op-core cam ./out/carver_positive.stl --out-gcode ./out/carver.gcode\n"
             "  op-core compare visit1.stl visit2.stl --out-stl visit2_aligned.stl\n"
             "  op-core gait examples/sample_gait.mot --side left --body-mass-kg 80\n"
+            "  op-core doctor\n"
             "  op-core ui --port 8765\n\n"
             "Docs: see docs/getting_started.md and docs/cli_and_tools_reference.md"
         ),
@@ -236,6 +238,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_gait.add_argument("mot_file", help="Path to OpenCap/OpenSim .mot or .sto file")
     p_gait.add_argument("--side", choices=["left", "right"], default="left", help="Affected side (default: left)")
     p_gait.add_argument("--body-mass-kg", type=float, default=80.0, help="Patient body mass in kg (default: 80.0)")
+
+    sub.add_parser(
+        "doctor",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="Report installed optional [accel] Python packages and external CAD/CAM/FEA binaries",
+        description="Inspect optional accelerators (numpy, scipy, trimesh, manifold3d, ampscan) and external binaries (ccx, gmsh, slicers, blender).",
+    )
 
     p_ui = sub.add_parser(
         "ui",
@@ -425,8 +434,16 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2))
         return 0
 
+    if args.cmd == "doctor":
+        print(json.dumps(probe_backends().to_dict(), indent=2))
+        return 0
+
     if args.cmd == "ui":
         serve_ui(host=args.host, port=args.port, open_browser=not args.no_browser)
         return 0
 
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
