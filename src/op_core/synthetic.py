@@ -88,10 +88,12 @@ def generate_transtibial_limb(
     faces: list[Tri] = []
 
     if include_knee_thigh and cuff_height_mm <= 40.0:
-        z_top = 125.0
+        z_top = 135.0
     else:
         z_top = cuff_height_mm
-    eff_rings = max(n_rings, 58) if z_top > 60.0 else n_rings
+    is_full_knee = z_top > 60.0
+    eff_rings = max(n_rings, 76) if is_full_knee else n_rings
+    eff_seg = max(n_seg, 72) if is_full_knee else n_seg
     z_bot = -length_mm
 
     # Rings run from proximal (ring 0) down to near-distal pole (ring eff_rings-1)
@@ -101,12 +103,12 @@ def generate_transtibial_limb(
         z = z_start + u * (z_bot + 10.0 - z_start)
 
         # Base longitudinal radius profile:
-        # - Above knee (z > 0): gradual quadriceps/thigh flare + slight supracondylar waist at z~42
+        # - Above knee (z > 0): supracondylar narrowing above condyles then quadriceps/thigh flare
         # - Below MPT (z <= 0): taper from proximal brim down to rounded soft-tissue distal end
         if z > 0.0:
-            t_thigh = max(0.0, (z - 15.0) / 110.0)
-            waist = -2.8 * math.exp(-((z - 42.0) / 14.0) ** 2)
-            base_r = pr * (1.0 + 0.30 * (t_thigh ** 0.92)) + waist
+            t_thigh = max(0.0, (z - 22.0) / 115.0)
+            waist = -4.2 * math.exp(-((z - 52.0) / 16.0) ** 2)
+            base_r = pr * (1.0 + 0.28 * (t_thigh ** 0.92)) + waist
         else:
             t_below = max(0.0, min(1.0, -z / max(1e-6, length_mm)))
             base_r = pr * (1.0 - 0.36 * t_below)
@@ -114,55 +116,104 @@ def generate_transtibial_limb(
                 cap_u = max(0.0, min(1.0, (z_bot + 28.0 - z) / 28.0))
                 base_r = max(dr * math.sqrt(max(0.02, 1.0 - 0.88 * cap_u * cap_u)), 8.0)
 
-        for s in range(n_seg):
-            theta = 2.0 * math.pi * s / n_seg  # 0=+X lateral, pi/2=+Y anterior, pi=-X medial, 3pi/2=-Y posterior
+        for s in range(eff_seg):
+            theta = 2.0 * math.pi * s / eff_seg  # 0=+X lateral, pi/2=+Y anterior, pi=-X medial, 3pi/2=-Y posterior
             ct = math.cos(theta)
             st = math.sin(theta)
+            # Signed angular offset from anterior midline (+Y, theta = pi/2)
+            d_ant = math.atan2(-ct, st)
 
             # Subtle triangular tibia cross-section in proximal-mid shank (z ~ -15..-135)
             tri_w = math.exp(-((z + 65.0) / 60.0) ** 2) if z <= 5.0 else 0.0
             tri_shape = -1.6 * tri_w * math.cos(3.0 * theta)
 
-            # Patella prominence (+Y anterior, centered z ~ +28 mm)
-            patella = 7.5 * math.exp(-((st - 1.0) ** 2) / 0.14) * math.exp(-((z - 28.0) / 18.0) ** 2)
+            # --- Sculpted Anatomical Knee & Patella ---
+            # Shield-shaped patella (wider at superior base z~44, tapering cleanly to apex at z~16)
+            pat_z_rel = (z - 33.0) / 17.5
+            # Narrow angular half-width inferiorly, broader superiorly for true shield/inverted-triangle kneecap
+            pat_ang_w = 0.24 + 0.11 * max(-1.0, min(1.0, (z - 26.0) / 18.0))
+            pat_u = math.hypot(d_ant / max(0.14, pat_ang_w), pat_z_rel)
+            # Smooth flat-topped super-Gaussian cap so anterior patellar face catches light cleanly
+            pat_amp = 12.0 if is_full_knee else 8.0
+            patella = pat_amp * math.exp(-(pat_u ** 2.6) * 0.95) if st > 0.25 else 0.0
 
-            # Patellar tendon slight concavity at MPT (z ~ 0..+8 mm) between patella and tibial tubercle
-            pt_dip = -2.2 * math.exp(-((st - 1.0) ** 2) / 0.10) * math.exp(-((z - 2.0) / 9.0) ** 2)
+            # Peripatellar & infrapatellar gutters flanking the patella and patellar tendon
+            # (deep medial/lateral knee dimples that make the kneecap visually unmistakable)
+            gutter_ang = (
+                math.exp(-((d_ant - 0.48) / 0.19) ** 2)
+                + math.exp(-((d_ant + 0.48) / 0.19) ** 2)
+            )
+            gutter_z = math.exp(-((z - 12.0) / 24.0) ** 2)
+            knee_gutters = (-5.8 if is_full_knee else -2.6) * gutter_ang * gutter_z
 
-            # Tibial tubercle prominence (+Y anterior, z ~ -16 mm)
-            tib_tub = 3.2 * math.exp(-((st - 1.0) ** 2) / 0.08) * math.exp(-((z + 16.0) / 11.0) ** 2)
+            # Suprapatellar dip just above superior pole of patella (z ~ +58 mm, anterior)
+            supra_dip = (
+                -4.4
+                * math.exp(-((d_ant / 0.36) ** 2))
+                * math.exp(-((z - 59.0) / 11.0) ** 2)
+                if is_full_knee
+                else 0.0
+            )
 
-            # Sharp anterior tibial crest ridge (+Y, theta ~ pi/2, z ~ -25..-130 mm)
+            # Patellar tendon cord at MPT (z ~ -12..+14 mm): concave shelf vs patella, narrow midline band
+            pt_shelf = (-3.2 if is_full_knee else -2.2) * math.exp(-((d_ant / 0.42) ** 2)) * math.exp(-((z - 2.0) / 9.5) ** 2)
+            pt_cord = (2.4 if is_full_knee else 1.0) * math.exp(-((d_ant / 0.14) ** 2)) * math.exp(-((z - 1.0) / 12.0) ** 2)
+
+            # Tibial tubercle prominence (+Y anterior, z ~ -18 mm) right where patellar tendon inserts
+            tib_tub = (4.6 if is_full_knee else 3.2) * math.exp(-((d_ant / 0.20) ** 2)) * math.exp(-((z + 18.0) / 11.0) ** 2)
+
+            # Sharp anterior tibial crest ridge (+Y, z ~ -25..-130 mm)
             crest_fade = 1.0 if z > z_bot + 30.0 else max(0.0, (z - z_bot) / 30.0)
             tibial_crest = (
-                3.6
+                3.8
                 * crest_fade
-                * math.exp(-((st - 1.0) ** 2) / 0.06)
+                * math.exp(-((st - 1.0) ** 2) / 0.055)
                 * math.exp(-((z + 75.0) / 52.0) ** 2)
             )
 
-            # Medial & lateral femoral epicondylar flare around knee joint (z ~ +22 mm)
-            med_condyle = 5.2 * math.exp(-((ct + 1.0) ** 2) / 0.16) * math.exp(-((z - 22.0) / 20.0) ** 2)
-            lat_condyle = 4.6 * math.exp(-((ct - 1.0) ** 2) / 0.16) * math.exp(-((z - 22.0) / 20.0) ** 2)
+            # Medial & lateral femoral epicondylar flare flanking knee joint (z ~ +24..+28 mm)
+            med_condyle = (7.2 if is_full_knee else 5.2) * math.exp(-((ct + 0.98) ** 2 + (st + 0.05) ** 2) / 0.16) * math.exp(-((z - 25.0) / 19.0) ** 2)
+            lat_condyle = (6.2 if is_full_knee else 4.6) * math.exp(-((ct - 0.98) ** 2 + (st + 0.05) ** 2) / 0.16) * math.exp(-((z - 27.0) / 19.0) ** 2)
 
-            # Popliteal fossa posterior dip behind the knee (-Y, z ~ +4..-10 mm)
-            pop_fossa = -4.2 * math.exp(-((st + 1.0) ** 2) / 0.18) * math.exp(-(z / 16.0) ** 2)
+            # Deep popliteal fossa behind the knee (-Y, z ~ +4..-6 mm) framed by hamstring tendons above
+            pop_fossa = (-6.8 if is_full_knee else -4.2) * math.exp(-((st + 1.0) ** 2) / 0.16) * math.exp(-((z - 4.0) / 16.0) ** 2)
+            ham_tendons = (
+                4.2
+                * (
+                    math.exp(-((st + 0.86) ** 2 + (ct + 0.50) ** 2) / 0.14)
+                    + math.exp(-((st + 0.86) ** 2 + (ct - 0.50) ** 2) / 0.14)
+                )
+                * math.exp(-((z - 44.0) / 34.0) ** 2)
+                if is_full_knee
+                else 0.0
+            )
 
             # Bi-lobed posterior gastrocnemius calf belly (-Y, z ~ -45..-110 mm)
             post_env = math.exp(-((z + 72.0) / 46.0) ** 2)
             calf_med = 5.8 * math.exp(-((st + 0.92) ** 2 + (ct + 0.38) ** 2) / 0.24) * post_env
             calf_lat = 5.4 * math.exp(-((st + 0.92) ** 2 + (ct - 0.38) ** 2) / 0.24) * post_env
 
-            # Quadriceps vastus lateralis & medialis fullness in distal thigh (z ~ +45..+120 mm)
-            quad_env = math.exp(-((z - 88.0) / 48.0) ** 2) if z > 15.0 else 0.0
-            quad_vl = 4.8 * math.exp(-((st - 0.72) ** 2 + (ct - 0.68) ** 2) / 0.32) * quad_env
-            quad_vm = 4.2 * math.exp(-((st - 0.72) ** 2 + (ct + 0.68) ** 2) / 0.32) * quad_env
+            # Quadriceps VMO teardrop (medial, lower) & vastus lateralis fullness in distal thigh
+            vmo = (
+                6.2
+                * math.exp(-((st - 0.72) ** 2 + (ct + 0.68) ** 2) / 0.22)
+                * math.exp(-((z - 76.0) / 34.0) ** 2)
+                if is_full_knee
+                else 0.0
+            )
+            quad_vl = (
+                5.8
+                * math.exp(-((st - 0.68) ** 2 + (ct - 0.72) ** 2) / 0.28)
+                * math.exp(-((z - 94.0) / 44.0) ** 2)
+                if is_full_knee
+                else 0.0
+            )
 
             # Lateral-posterolateral fibular head prominence (+X slightly posterior, z ~ -24 mm)
             fib_head = (
-                4.2
-                * math.exp(-((ct - 0.96) ** 2 + (st + 0.26) ** 2) / 0.12)
-                * math.exp(-((z + 24.0) / 15.0) ** 2)
+                4.6
+                * math.exp(-((ct - 0.96) ** 2 + (st + 0.26) ** 2) / 0.11)
+                * math.exp(-((z + 24.0) / 14.0) ** 2)
             )
 
             rad = max(
@@ -170,47 +221,59 @@ def generate_transtibial_limb(
                 base_r
                 + tri_shape
                 + patella
-                + pt_dip
+                + knee_gutters
+                + supra_dip
+                + pt_shelf
+                + pt_cord
                 + tib_tub
                 + tibial_crest
                 + med_condyle
                 + lat_condyle
                 + pop_fossa
+                + ham_tendons
                 + calf_med
                 + calf_lat
+                + vmo
                 + quad_vl
-                + quad_vm
                 + fib_head,
             )
 
-            # Physiological flexion curve: slight posterior thigh sweep proximally, mild shank flexion distally
-            if z > 10.0:
-                y_shift = -0.04 * (z - 10.0)
+            # Physiological knee flexion silhouette: when full knee+thigh is shown, give a clear ~10 deg
+            # resting clinical bend so the knee joint and patella project forward naturally.
+            if is_full_knee:
+                if z > 20.0:
+                    y_shift = -0.15 * (z - 20.0)
+                else:
+                    y_shift = -0.07 * max(0.0, 20.0 - z)
             else:
-                y_shift = -0.05 * max(0.0, -z)
+                if z > 10.0:
+                    y_shift = -0.04 * (z - 10.0)
+                else:
+                    y_shift = -0.05 * max(0.0, -z)
             vertices.append((rad * ct, rad * st + y_shift, z))
 
     for r in range(eff_rings - 1):
-        for s in range(n_seg):
-            sn = (s + 1) % n_seg
-            a = r * n_seg + s
-            b = r * n_seg + sn
-            c = (r + 1) * n_seg + sn
-            d = (r + 1) * n_seg + s
+        for s in range(eff_seg):
+            sn = (s + 1) % eff_seg
+            a = r * eff_seg + s
+            b = r * eff_seg + sn
+            c = (r + 1) * eff_seg + sn
+            d = (r + 1) * eff_seg + s
             # Outward winding (top-to-bottom ring order)
             faces.append((a, d, c))
             faces.append((a, c, b))
 
     # Close distal apex pole cleanly
+    dist_y_shift = -0.07 * (20.0 + length_mm) if is_full_knee else -0.05 * length_mm
     distal_pole_idx = len(vertices)
-    vertices.append((0.0, -0.05 * length_mm, z_bot))
-    last_ring = (eff_rings - 1) * n_seg
-    for s in range(n_seg):
-        sn = (s + 1) % n_seg
+    vertices.append((0.0, dist_y_shift, z_bot))
+    last_ring = (eff_rings - 1) * eff_seg
+    for s in range(eff_seg):
+        sn = (s + 1) % eff_seg
         faces.append((last_ring + s, distal_pole_idx, last_ring + sn))
 
     if not open_cuff:
-        _close_proximal_dome(vertices, faces, n_seg, height_mm=22.0, dome_rings=5)
+        _close_proximal_dome(vertices, faces, eff_seg, height_mm=22.0, dome_rings=5)
 
     mesh = TriMesh(vertices=vertices, faces=faces)
     target_coords: dict[str, Vec3] = {
@@ -218,8 +281,8 @@ def generate_transtibial_limb(
         "popliteal": (0.0, -pr, -5.0),
         "fibular_head": (pr + 3.5, -6.0, -24.0),
         "tibial_crest": (0.0, pr * 0.85, -75.0),
-        "patella": (0.0, pr + 8.0, 28.0),
-        "distal_end": (0.0, -0.05 * length_mm, z_bot),
+        "patella": (0.0, pr + 14.0, 33.0),
+        "distal_end": (0.0, dist_y_shift, z_bot),
     }
     landmarks = {name: mesh.nearest_vertex(pt) for name, pt in target_coords.items()}
     return SyntheticLimbCase(

@@ -101,6 +101,11 @@ class TestHardening(unittest.TestCase):
         tt_full = generate_transtibial_limb(open_cuff=False, include_knee_thigh=True, seed=0)
         self.assertTrue(tt_full.mesh.is_watertight_manifold())
         self.assertGreater(tt_full.mesh.bounds()[1][2], 100.0)
+        pat_y = max(v[1] for v in tt_full.mesh.vertices if 28.0 <= v[2] <= 38.0 and abs(v[0]) < 8.0)
+        supra_y = max(v[1] for v in tt_full.mesh.vertices if 56.0 <= v[2] <= 63.0 and abs(v[0]) < 8.0)
+        mpt_y = max(v[1] for v in tt_full.mesh.vertices if -2.0 <= v[2] <= 6.0 and abs(v[0]) < 8.0)
+        self.assertGreater(pat_y - supra_y, 10.0)  # Clear patella projection below suprapatellar dip
+        self.assertGreater(pat_y - mpt_y, 8.0)     # Clear patellar tendon shelf below patella apex
         aligned_tt, qa_tt = run_scan_qa(
             tt_full.mesh,
             mpt_point=tt_full.landmark_coords["mpt"],
