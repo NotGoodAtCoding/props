@@ -82,7 +82,21 @@ def _default_recipe_for_device(device: str, landmarks_xyz: dict[str, tuple[float
                 {"op": "landmark_relief", "id": "scarpa", "landmark": "scarpas_triangle", "offset_mm": -5.0, "radius_mm": 28.0},
                 {"op": "landmark_relief", "id": "troch", "landmark": "trochanter", "offset_mm": 4.0, "radius_mm": 26.0},
             ],
-            shell={"wall_distal_mm": 5.5, "wall_proximal_mm": 3.0, "trimline_fillet_mm": 12.0, "proximal_trim_z_mm": 45.0, "hardware": "pyramid_50_8_m6_captive"},
+            shell={
+                "wall_distal_mm": 5.5,
+                "wall_proximal_mm": 3.0,
+                "trimline_fillet_mm": 12.0,
+                "proximal_trim_z_mm": 45.0,
+                "trimline": {
+                    "preset": "tf_ischial",
+                    "anterior_z_mm": 32.0,
+                    "posterior_z_mm": 18.0,
+                    "medial_z_mm": 10.0,
+                    "lateral_z_mm": 50.0,
+                    "points": [],
+                },
+                "hardware": "pyramid_50_8_m6_captive",
+            },
         )
     return OpRecipe(
         device_type="transtibial_socket",
@@ -102,7 +116,21 @@ def _default_recipe_for_device(device: str, landmarks_xyz: dict[str, tuple[float
             {"op": "landmark_relief", "id": "crest", "landmark": "tibial_crest", "offset_mm": 3.0, "radius_mm": 22.0},
             {"op": "landmark_relief", "id": "pop", "landmark": "popliteal", "offset_mm": -4.0, "radius_mm": 24.0},
         ],
-        shell={"wall_distal_mm": 4.5, "wall_proximal_mm": 2.5, "trimline_fillet_mm": 10.0, "proximal_trim_z_mm": 38.0, "hardware": "pyramid_50_8_m6_captive"},
+        shell={
+            "wall_distal_mm": 4.5,
+            "wall_proximal_mm": 2.5,
+            "trimline_fillet_mm": 10.0,
+            "proximal_trim_z_mm": 38.0,
+            "trimline": {
+                "preset": "ptb",
+                "anterior_z_mm": 30.0,
+                "posterior_z_mm": 0.0,
+                "medial_z_mm": 24.0,
+                "lateral_z_mm": 24.0,
+                "points": [],
+            },
+            "hardware": "pyramid_50_8_m6_captive",
+        },
     )
 
 
@@ -409,6 +437,9 @@ _HTML_PAGE = r"""<!DOCTYPE html>
           <input type="checkbox" id="chkLandmarks" checked onchange="drawScene()" /> Landmarks
         </label>
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
+          <input type="checkbox" id="chkTrimline" checked onchange="drawScene()" /> Trim Line
+        </label>
+        <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" id="chkSlices" checked onchange="drawScene()" /> 20mm Slices
         </label>
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
@@ -434,15 +465,28 @@ const state = {
   activeMeshKey: 'base',
   armedLandmark: null,
   armedCustomMod: null,
+  armedTrimlineDraw: false,
   lint: null,
   downloads: null,
   cam: { yaw: 0.55, pitch: 0.3, dist: 380, target: [0, 0, -60] }
 };
 
+const TRIMLINE_PRESETS = {
+  ptb: { anterior_z_mm: 30, posterior_z_mm: 0, medial_z_mm: 24, lateral_z_mm: 24 },
+  ptb_sc: { anterior_z_mm: 28, posterior_z_mm: -2, medial_z_mm: 48, lateral_z_mm: 46 },
+  ptb_scsp: { anterior_z_mm: 56, posterior_z_mm: -2, medial_z_mm: 50, lateral_z_mm: 48 },
+  tf_ischial: { anterior_z_mm: 32, posterior_z_mm: 18, medial_z_mm: 10, lateral_z_mm: 50 },
+  flat: { anterior_z_mm: 38, posterior_z_mm: 38, medial_z_mm: 38, lateral_z_mm: 38 }
+};
+
 function updateHudHint() {
   const el = document.getElementById('hudBottom');
   if (!el) return;
-  if (state.armedCustomMod) {
+  if (state.armedTrimlineDraw) {
+    const n = (state.recipe && state.recipe.shell && state.recipe.shell.trimline && state.recipe.shell.trimline.points) ? state.recipe.shell.trimline.points.length : 0;
+    el.classList.add('armed');
+    el.textContent = `DRAW TRIM LINE (${n} pts): Click around the 3D limb surface to place socket cut points (>= 3 pts forms closed cut contour).`;
+  } else if (state.armedCustomMod) {
     el.classList.add('armed');
     el.textContent = `PLACE CUSTOM MOD "${state.armedCustomMod.label}": Click directly on the 3D limb surface (or click button again to cancel).`;
   } else if (state.armedLandmark) {
@@ -450,7 +494,7 @@ function updateHudHint() {
     el.textContent = `PICK LANDMARK "${state.armedLandmark}": Click directly on the 3D limb surface.`;
   } else {
     el.classList.remove('armed');
-    el.textContent = 'Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark or Custom Mod';
+    el.textContent = 'Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark, Custom Mod, or Trim Line';
   }
 }
 
@@ -461,6 +505,7 @@ document.querySelectorAll('.step-btn').forEach(btn => {
     document.querySelectorAll('.step-pane').forEach(p => p.classList.toggle('hidden', p.id !== 'step-' + step));
     if (step !== '2') { state.armedLandmark = null; renderLandmarks(); }
     if (step !== '3') { state.armedCustomMod = null; refreshCustomModButton(); }
+    if (step !== '4') { state.armedTrimlineDraw = false; renderShellControls(); }
     updateHudHint();
   });
 });
@@ -709,6 +754,70 @@ function renderRectifyControls() {
   document.getElementById('rectifyControls').innerHTML = html;
 }
 
+function ensureTrimlineObj() {
+  if (!state.recipe) return null;
+  if (!state.recipe.shell) state.recipe.shell = {};
+  if (!state.recipe.shell.trimline) {
+    const defKey = state.recipe.device_type === 'transfemoral_socket' ? 'tf_ischial' : 'ptb';
+    state.recipe.shell.trimline = Object.assign({ preset: defKey, points: [] }, TRIMLINE_PRESETS[defKey]);
+  }
+  return state.recipe.shell.trimline;
+}
+
+function applyTrimlinePreset(key) {
+  const tl = ensureTrimlineObj();
+  if (!tl) return;
+  tl.preset = key;
+  if (TRIMLINE_PRESETS[key]) {
+    Object.assign(tl, TRIMLINE_PRESETS[key]);
+    tl.points = [];
+  }
+  renderShellControls();
+  drawScene();
+}
+
+function toggleTrimlineDraw() {
+  state.armedLandmark = null;
+  state.armedCustomMod = null;
+  state.armedTrimlineDraw = !state.armedTrimlineDraw;
+  if (state.armedTrimlineDraw) {
+    const tl = ensureTrimlineObj();
+    if (tl) tl.preset = 'custom';
+    // Show limb positive while placing trimline points if currently viewing compiled shell
+    if (state.activeMeshKey === 'shell') {
+      document.getElementById('chkShell').checked = false;
+      state.activeMeshKey = state.rectMesh ? 'rect' : 'base';
+      uploadMeshToGL();
+    }
+  }
+  renderShellControls();
+  updateHudHint();
+  drawScene();
+}
+
+function undoTrimlinePoint() {
+  const tl = ensureTrimlineObj();
+  if (tl && tl.points && tl.points.length) {
+    tl.points.pop();
+    renderShellControls();
+    updateHudHint();
+    drawScene();
+  }
+}
+
+function clearTrimlinePoints() {
+  const tl = ensureTrimlineObj();
+  if (tl) {
+    tl.points = [];
+    if (tl.preset === 'custom') {
+      tl.preset = state.recipe.device_type === 'transfemoral_socket' ? 'tf_ischial' : 'ptb';
+    }
+    renderShellControls();
+    updateHudHint();
+    drawScene();
+  }
+}
+
 function renderShellControls() {
   const r = state.recipe;
   if (!r) return;
@@ -719,9 +828,35 @@ function renderShellControls() {
   html += sliderField('wp', 'Proximal Brim / Calf Wall', 2.0, 5.0, 0.5, sh.wall_proximal_mm ?? 2.5, 'mm',
     'v => { state.recipe.shell.wall_proximal_mm = v; }');
   if (r.device_type !== 'afo') {
-    const defTrim = r.device_type === 'transfemoral_socket' ? 45.0 : 38.0;
-    html += sliderField('trimz', 'Proximal Socket Trim Z', 15, 75, 1, sh.proximal_trim_z_mm ?? defTrim, 'mm',
-      'v => { state.recipe.shell.proximal_trim_z_mm = v; }');
+    const tl = ensureTrimlineObj();
+    const nPts = (tl.points || []).length;
+    html += `<div class="mod-box">
+      <div class="mod-head"><span>Socket Trim Line (Cut Contour)</span><span class="mono">${nPts >= 3 ? nPts + ' custom pts' : (tl.preset || 'ptb').toUpperCase()}</span></div>
+      <label class="field">
+        <span class="lbl"><span>Clinical Trim Line Preset</span></span>
+        <select onchange="applyTrimlinePreset(this.value)">
+          <option value="ptb" ${tl.preset === 'ptb' ? 'selected' : ''}>PTB Standard (Anterior high / Popliteal dip)</option>
+          <option value="ptb_sc" ${tl.preset === 'ptb_sc' ? 'selected' : ''}>PTB-SC (Supracondylar M/L Ears)</option>
+          <option value="ptb_scsp" ${tl.preset === 'ptb_scsp' ? 'selected' : ''}>PTB-SCSP (Suprapatellar + Ears)</option>
+          <option value="tf_ischial" ${tl.preset === 'tf_ischial' ? 'selected' : ''}>TF Ischial Containment (High Lateral)</option>
+          <option value="flat" ${tl.preset === 'flat' ? 'selected' : ''}>Flat Planar Brim</option>
+          <option value="custom" ${tl.preset === 'custom' ? 'selected' : ''}>Custom Drawn Points</option>
+        </select>
+      </label>
+      ${sliderField('tl_ant', 'Anterior Brim Z', -20, 75, 1, tl.anterior_z_mm ?? 30, 'mm',
+        'v => { ensureTrimlineObj().anterior_z_mm = v; ensureTrimlineObj().points = []; drawScene(); }')}
+      ${sliderField('tl_post', 'Posterior Popliteal Dip Z', -40, 60, 1, tl.posterior_z_mm ?? 0, 'mm',
+        'v => { ensureTrimlineObj().posterior_z_mm = v; ensureTrimlineObj().points = []; drawScene(); }')}
+      ${sliderField('tl_med', 'Medial Wall Z', -20, 75, 1, tl.medial_z_mm ?? 24, 'mm',
+        'v => { ensureTrimlineObj().medial_z_mm = v; ensureTrimlineObj().points = []; drawScene(); }')}
+      ${sliderField('tl_lat', 'Lateral Wall Z', -20, 75, 1, tl.lateral_z_mm ?? 24, 'mm',
+        'v => { ensureTrimlineObj().lateral_z_mm = v; ensureTrimlineObj().points = []; drawScene(); }')}
+      <div class="row" style="margin-top:6px;">
+        <button class="btn ${state.armedTrimlineDraw ? 'ok' : 'secondary'} sm" style="flex:1;" onclick="toggleTrimlineDraw()">${state.armedTrimlineDraw ? 'Stop Drawing Cut Line' : 'Click 3D Mesh to Draw Trim Line'}</button>
+        <button class="btn secondary sm" onclick="undoTrimlinePoint()" ${nPts ? '' : 'disabled'}>Undo Pt</button>
+        <button class="btn danger sm" onclick="clearTrimlinePoints()" ${nPts ? '' : 'disabled'}>Clear</button>
+      </div>
+    </div>`;
     html += sliderField('flex', 'Bench Alignment Flexion', -5, 15, 0.5, al.flexion_deg ?? 5.0, '°',
       'v => { state.recipe.alignment.flexion_deg = v; }');
     html += sliderField('add', 'Bench Alignment Adduction', -5, 15, 0.5, al.adduction_deg ?? 5.0, '°',
@@ -1087,6 +1222,83 @@ function renderLandmarkTags(mvp) {
   }
 }
 
+function evalTrimlineZJS(theta, tl, cx, cy) {
+  const pts = (tl && tl.points) || [];
+  if (pts.length >= 3) {
+    const knots = pts.map(p => [Math.atan2(p[1] - cy, p[0] - cx), p[2]]).sort((a, b) => a[0] - b[0]);
+    const ext = [[knots[knots.length - 1][0] - 2 * Math.PI, knots[knots.length - 1][1]], ...knots, [knots[0][0] + 2 * Math.PI, knots[0][1]]];
+    const th = Math.atan2(Math.sin(theta), Math.cos(theta));
+    for (let k = 0; k < ext.length - 1; k++) {
+      const a0 = ext[k][0], z0 = ext[k][1], a1 = ext[k + 1][0], z1 = ext[k + 1][1];
+      if (a0 <= th && th <= a1) {
+        const t = Math.max(0, Math.min(1, (th - a0) / Math.max(1e-9, a1 - a0)));
+        const w = t * t * t * (t * (t * 6 - 15) + 10);
+        return z0 * (1 - w) + z1 * w;
+      }
+    }
+  }
+  const zA = tl.anterior_z_mm ?? 30, zP = tl.posterior_z_mm ?? 0, zM = tl.medial_z_mm ?? 24, zL = tl.lateral_z_mm ?? 24;
+  const ct = Math.cos(theta), st = Math.sin(theta);
+  const wA = Math.max(0, st) ** 2, wP = Math.max(0, -st) ** 2;
+  const wL = Math.max(0, ct) ** 2, wM = Math.max(0, -ct) ** 2;
+  return zA * wA + zP * wP + zL * wL + zM * wM;
+}
+
+function buildTrimlineOverlay(m, tl, outPts, outCols) {
+  if (!m || !tl || !state.recipe || state.recipe.device_type === 'afo') return;
+  const verts = m.vertices, idxs = m.indices, nV = m.vertex_count;
+  const zmin = m.bounds.min[2], zmax = m.bounds.max[2], span = Math.max(1e-6, zmax - zmin);
+  const zLo = zmin + 0.25 * span, zHi = zmin + 0.75 * span;
+  let sx = 0, sy = 0, cnt = 0;
+  for (let i = 0; i < nV; i++) {
+    const z = verts[i * 3 + 2];
+    if (z >= zLo && z <= zHi) { sx += verts[i * 3]; sy += verts[i * 3 + 1]; cnt++; }
+  }
+  const cx = cnt >= 12 ? sx / cnt : m.center[0];
+  const cy = cnt >= 12 ? sy / cnt : m.center[1];
+
+  // Marching-triangles exact zero-contour of f(v) = z_trim(theta_v) - z_v on the limb surface
+  const vals = new Float32Array(nV);
+  for (let i = 0; i < nV; i++) {
+    const x = verts[i * 3], y = verts[i * 3 + 1], z = verts[i * 3 + 2];
+    const zt = evalTrimlineZJS(Math.atan2(y - cy, x - cx), tl, cx, cy);
+    vals[i] = zt - z;
+  }
+  const col = [1.0, 0.22, 0.55];
+  for (let i = 0; i < idxs.length; i += 3) {
+    const ia = idxs[i], ib = idxs[i + 1], ic = idxs[i + 2];
+    const fa = vals[ia], fb = vals[ib], fc = vals[ic];
+    const hits = [];
+    const pairs = [[ia, ib, fa, fb], [ib, ic, fb, fc], [ic, ia, fc, fa]];
+    for (const [u, v, fu, fv] of pairs) {
+      if ((fu >= 0 && fv < 0) || (fu < 0 && fv >= 0)) {
+        const t = fu / (fu - fv);
+        hits.push([
+          verts[u*3] + t * (verts[v*3] - verts[u*3]),
+          verts[u*3+1] + t * (verts[v*3+1] - verts[u*3+1]),
+          verts[u*3+2] + t * (verts[v*3+2] - verts[u*3+2])
+        ]);
+      }
+    }
+    if (hits.length === 2) {
+      outPts.push(...hits[0], ...hits[1]);
+      outCols.push(...col, ...col);
+    }
+  }
+  // Draw any user-clicked custom trimline control points as bright markers
+  const cPts = tl.points || [];
+  for (const p of cPts) {
+    const s = 6.5;
+    const mCol = [1.0, 0.42, 0.72];
+    const segs = [
+      [p[0]-s, p[1], p[2], p[0]+s, p[1], p[2]],
+      [p[0], p[1]-s, p[2], p[0], p[1]+s, p[2]],
+      [p[0], p[1], p[2]-s, p[0], p[1], p[2]+s]
+    ];
+    for (const sg of segs) { outPts.push(...sg); outCols.push(...mCol, ...mCol); }
+  }
+}
+
 function drawOverlays(mvp) {
   if (!lineProg) return;
   const slicePts = [], sliceCols = [];
@@ -1104,6 +1316,9 @@ function drawOverlays(mvp) {
         sliceCols.push(0.22, 0.74, 0.97, 0.22, 0.74, 0.97);
       }
     }
+  }
+  if (document.getElementById('chkTrimline') && document.getElementById('chkTrimline').checked && state.activeMeshKey !== 'shell' && state.recipe && state.recipe.shell && state.recipe.shell.trimline) {
+    buildTrimlineOverlay(m, state.recipe.shell.trimline, lmPts, lmCols);
   }
   if (document.getElementById('chkLandmarks').checked && state.recipe && state.recipe.landmarks) {
     for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
@@ -1194,7 +1409,20 @@ function pickSurfacePoint(clientX, clientY) {
 let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
 canvas.addEventListener('mousedown', e => { dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY; });
 window.addEventListener('mouseup', e => {
-  if (dragging && !dragMoved && state.armedCustomMod) {
+  if (dragging && !dragMoved && state.armedTrimlineDraw) {
+    const pt = pickSurfacePoint(e.clientX, e.clientY);
+    if (pt) {
+      const tl = ensureTrimlineObj();
+      if (tl) {
+        if (!tl.points) tl.points = [];
+        tl.preset = 'custom';
+        tl.points.push(pt.map(v => Number(v.toFixed(2))));
+        renderShellControls();
+        updateHudHint();
+        drawScene();
+      }
+    }
+  } else if (dragging && !dragMoved && state.armedCustomMod) {
     const pt = pickSurfacePoint(e.clientX, e.clientY);
     if (pt) {
       const cfg = state.armedCustomMod;
@@ -1455,6 +1683,7 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                         )
                     elif recipe.device_type == "transfemoral_socket":
                         trim_z = float(recipe.shell.get("proximal_trim_z_mm", 45.0))
+                        trimline = recipe.shell.get("trimline")
                         sh = build_tf_socket_shell(
                             res.rectified_mesh,
                             wall_distal_mm=float(recipe.shell.get("wall_distal_mm", 5.5)),
@@ -1462,9 +1691,11 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                             flexion_deg=float(recipe.alignment.get("flexion_deg", 5.0)),
                             adduction_deg=float(recipe.alignment.get("adduction_deg", 8.0)),
                             proximal_trim_z_mm=trim_z,
+                            trimline=trimline,
                         )
                     else:
                         trim_z = float(recipe.shell.get("proximal_trim_z_mm", 38.0))
+                        trimline = recipe.shell.get("trimline")
                         sh = build_tt_socket_shell(
                             res.rectified_mesh,
                             wall_distal_mm=float(recipe.shell.get("wall_distal_mm", 4.5)),
@@ -1472,6 +1703,7 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                             flexion_deg=float(recipe.alignment.get("flexion_deg", 5.0)),
                             adduction_deg=float(recipe.alignment.get("adduction_deg", 5.0)),
                             proximal_trim_z_mm=trim_z,
+                            trimline=trimline,
                         )
 
                     write_binary_stl(sh.shell_mesh, out / "device_shell.stl")
@@ -1484,7 +1716,11 @@ def _make_handler(store: SessionStore) -> type[BaseHTTPRequestHandler]:
                         "Recipe (.oprecipe.json)": f"/api/download/{body['session_id']}/recipe.oprecipe.json",
                     }
                     if recipe.device_type != "afo":
-                        carver = export_carver_positive(res.rectified_mesh, proximal_trim_z_mm=trim_z)
+                        carver = export_carver_positive(
+                            res.rectified_mesh,
+                            proximal_trim_z_mm=trim_z,
+                            trimline=trimline,
+                        )
                         write_binary_stl(carver.positive_mesh, out / "carver_positive.stl")
                         generate_4axis_gcode_and_simulate(
                             carver.positive_mesh,

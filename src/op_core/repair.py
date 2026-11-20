@@ -211,6 +211,80 @@ def fill_small_holes(
     return TriMesh(vertices=verts, faces=faces), filled
 
 
+def clip_mesh_scalar(
+    mesh: TriMesh,
+    values: list[float],
+    threshold: float = 0.0,
+    keep_above: bool = True,
+) -> TriMesh:
+    """Clip a TriMesh cleanly against an arbitrary per-vertex scalar iso-surface with zero T-junctions."""
+    if len(values) != len(mesh.vertices):
+        raise ValueError("values length must match mesh.vertices length")
+
+    verts = list(mesh.vertices)
+    # Nudge exact-threshold values slightly to avoid zero-length edges or degenerate boundary vertices
+    signed = [
+        (v - threshold) if abs(v - threshold) >= 1e-7 else (1e-7 if keep_above else -1e-7)
+        for v in values
+    ]
+    new_faces: list[Tri] = []
+    edge_cut_cache: dict[tuple[int, int], int] = {}
+
+    def is_kept(idx: int) -> bool:
+        return signed[idx] >= 0.0 if keep_above else signed[idx] <= 0.0
+
+    def cut_vertex(u: int, v: int) -> int:
+        key = (u, v) if u < v else (v, u)
+        if key in edge_cut_cache:
+            return edge_cut_cache[key]
+        pu, pv = verts[u], verts[v]
+        su, sv = signed[u], signed[v]
+        denom = sv - su
+        t = 0.5 if abs(denom) < 1e-12 else max(1e-5, min(1.0 - 1e-5, -su / denom))
+        pt = (
+            pu[0] + t * (pv[0] - pu[0]),
+            pu[1] + t * (pv[1] - pu[1]),
+            pu[2] + t * (pv[2] - pu[2]),
+        )
+        idx = len(verts)
+        verts.append(pt)
+        edge_cut_cache[key] = idx
+        return idx
+
+    for a, b, c in mesh.faces:
+        ka, kb, kc = is_kept(a), is_kept(b), is_kept(c)
+        n_kept = int(ka) + int(kb) + int(kc)
+        if n_kept == 0:
+            continue
+        if n_kept == 3:
+            new_faces.append((a, b, c))
+            continue
+
+        tri = [a, b, c]
+        flags = [ka, kb, kc]
+        while not (flags[0] and (n_kept == 1 or flags[1])):
+            tri = [tri[1], tri[2], tri[0]]
+            flags = [flags[1], flags[2], flags[0]]
+
+        v0, v1, v2 = tri
+        if n_kept == 1:
+            p01 = cut_vertex(v0, v1)
+            p02 = cut_vertex(v0, v2)
+            new_faces.append((v0, p01, p02))
+        else:
+            p12 = cut_vertex(v1, v2)
+            p20 = cut_vertex(v2, v0)
+            new_faces.append((v0, v1, p12))
+            new_faces.append((v0, p12, p20))
+
+    used = sorted({idx for f in new_faces for idx in f})
+    remap = {old: idx for idx, old in enumerate(used)}
+    return TriMesh(
+        vertices=[verts[old] for old in used],
+        faces=[(remap[a], remap[b], remap[c]) for a, b, c in new_faces],
+    )
+
+
 def clip_mesh_z(mesh: TriMesh, z_cut: float, keep_above: bool = True) -> TriMesh:
     """Clip a TriMesh cleanly against plane z = z_cut with shared edge vertices (zero T-junctions)."""
     verts = list(mesh.vertices)

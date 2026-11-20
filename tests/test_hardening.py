@@ -123,6 +123,22 @@ class TestHardening(unittest.TestCase):
         self.assertTrue(tf_sh.shell_mesh.is_watertight_manifold(), tf_sh.shell_mesh.edge_topology())
         self.assertLessEqual(tf_sh.shell_mesh.bounds()[1][2], 52.0)
 
+        # Contoured PTB-SC & custom clicked 3D trimlines build watertight shells + carver positives
+        from op_core.shell import TRIMLINE_PRESETS
+        sc_tl = dict(TRIMLINE_PRESETS["ptb_sc"], preset="ptb_sc")
+        sc_sh = build_tt_socket_shell(aligned_tt, trimline=sc_tl)
+        self.assertTrue(sc_sh.shell_mesh.is_watertight_manifold(), sc_sh.shell_mesh.edge_topology())
+        self.assertGreater(sc_sh.shell_mesh.bounds()[1][2], 44.0)
+        sc_carver = export_carver_positive(aligned_tt, trimline=sc_tl)
+        self.assertTrue(sc_carver.positive_mesh.is_watertight_manifold(), sc_carver.positive_mesh.edge_topology())
+
+        custom_tl = {
+            "preset": "custom",
+            "points": [[0.0, 0.0, 34.0], [50.0, -54.0, 50.0], [0.0, -108.0, -2.0], [-50.0, -54.0, 48.0]],
+        }
+        cust_sh = build_tt_socket_shell(aligned_tt, trimline=custom_tl)
+        self.assertTrue(cust_sh.shell_mesh.is_watertight_manifold(), cust_sh.shell_mesh.edge_topology())
+
     def test_fetch_openlimb_normalizer_scales_fractional_mesh(self) -> None:
         from scripts.fetch_openlimb import normalize_openlimb_stl
 

@@ -42,7 +42,7 @@ class TestUIServer(unittest.TestCase):
             # 1. Index HTML + Health + new UI controls present
             html = opener.open(f"{base}/").read().decode("utf-8")
             self.assertIn("op-core 3D Clinical Workstation", html)
-            for token in ('id="renderMode"', "wire_only", "uKeyLightDir", "armCustomMod", "addCustomZone", "gl.GREATER", "uAlpha", "landmarkTags"):
+            for token in ('id="renderMode"', "wire_only", "uKeyLightDir", "armCustomMod", "addCustomZone", "gl.GREATER", "uAlpha", "landmarkTags", "chkTrimline", "toggleTrimlineDraw", "buildTrimlineOverlay"):
                 self.assertIn(token, html)
             health = json.loads(opener.open(f"{base}/api/health").read().decode("utf-8"))
             self.assertEqual(health["status"], "ok")
