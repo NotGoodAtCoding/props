@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .carver_cam import generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
+from .gait_bridge import analyze_gait_mot
 from .linter import export_fabrication_dossier, lint_device
 from .mesh import read_stl, write_binary_stl
 from .metrology import compare_scans
@@ -107,6 +108,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  op-core diff v1.oprecipe.json v2.oprecipe.json\n"
             "  op-core cam ./out/carver_positive.stl --out-gcode ./out/carver.gcode\n"
             "  op-core compare visit1.stl visit2.stl --out-stl visit2_aligned.stl\n"
+            "  op-core gait examples/sample_gait.mot --side left --body-mass-kg 80\n"
             "  op-core ui --port 8765\n\n"
             "Docs: see docs/getting_started.md and docs/cli_and_tools_reference.md"
         ),
@@ -223,6 +225,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument("baseline_stl", help="Baseline .stl scan")
     p_cmp.add_argument("followup_stl", help="Follow-up or rectified .stl scan")
     p_cmp.add_argument("--out-stl", help="Optional path to save ICP-aligned follow-up STL")
+
+    p_gait = sub.add_parser(
+        "gait",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="Analyze OpenCap/OpenSim .mot kinematics for O&P alignment and ISO 10328 load sizing",
+        description="Parse OpenCap/OpenSim .mot gait curves and output asymmetry, foot-drop, and ISO 10328 force sizing.",
+        epilog="Example:\n  op-core gait examples/sample_gait.mot --side left --body-mass-kg 80",
+    )
+    p_gait.add_argument("mot_file", help="Path to OpenCap/OpenSim .mot or .sto file")
+    p_gait.add_argument("--side", choices=["left", "right"], default="left", help="Affected side (default: left)")
+    p_gait.add_argument("--body-mass-kg", type=float, default=80.0, help="Patient body mass in kg (default: 80.0)")
 
     p_ui = sub.add_parser(
         "ui",
@@ -393,6 +406,22 @@ def main(argv: list[str] | None = None) -> int:
             "followup_volume_ml": round(res.followup_volume_ml, 1),
             "volume_change_pct": round(res.volume_change_pct, 2),
             "icp_iterations": res.icp_iterations,
+        }, indent=2))
+        return 0
+
+    if args.cmd == "gait":
+        rep = analyze_gait_mot(args.mot_file, affected_side=args.side, body_mass_kg=args.body_mass_kg)
+        print(json.dumps({
+            "affected_side": rep.affected_side,
+            "duration_s": round(rep.duration_s, 3),
+            "sample_count": rep.sample_count,
+            "peak_knee_flexion_affected_deg": round(rep.peak_knee_flexion_affected_deg, 2),
+            "peak_knee_flexion_contralateral_deg": round(rep.peak_knee_flexion_contralateral_deg, 2),
+            "knee_flexion_asymmetry_pct": round(rep.knee_flexion_asymmetry_pct, 1),
+            "min_ankle_angle_affected_deg": round(rep.min_ankle_angle_affected_deg, 2),
+            "peak_vertical_grf_bw": round(rep.peak_vertical_grf_bw, 2),
+            "recommended_iso10328_force_n": round(rep.recommended_iso10328_force_n, 1),
+            "recommendations": rep.recommendations,
         }, indent=2))
         return 0
 

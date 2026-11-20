@@ -2,6 +2,7 @@
 
 from .carver_cam import CarverCamResult, generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
+from .gait_bridge import GaitClinicalSummary, GaitTable, analyze_gait_mot, parse_opensim_mot
 from .linter import LintReport, export_fabrication_dossier, export_fabrication_dossier_pdf, lint_device
 from .mesh import TriMesh, read_stl, write_binary_stl
 from .metrology import ScanComparisonResult, compare_scans, has_ampscan, horn_rigid_transform, icp_align_scans
@@ -29,6 +30,8 @@ from .shell import (
 __all__ = [
     "CarverCamResult",
     "CarverPositiveResult",
+    "GaitClinicalSummary",
+    "GaitTable",
     "LintReport",
     "OpRecipe",
     "RectificationResult",
@@ -38,6 +41,7 @@ __all__ = [
     "ShellBuildResult",
     "TriMesh",
     "align_canonical_limb",
+    "analyze_gait_mot",
     "apply_afo_posture",
     "apply_recipe",
     "build_afo_shell",
@@ -60,6 +64,7 @@ __all__ = [
     "lint_device",
     "measure_circumferences",
     "mesh_sha256",
+    "parse_opensim_mot",
     "read_stl",
     "repair_scan_mesh",
     "run_scan_qa",
