@@ -44,6 +44,9 @@ class TestUIServer(unittest.TestCase):
             self.assertIn("op-core 3D Clinical Workstation", html)
             for token in (
                 'id="renderMode"',
+                'value="heatmap"',
+                'id="chkWireframe"',
+                'id="heatmapLegend"',
                 "wire_only",
                 "uKeyLightDir",
                 "armCustomMod",

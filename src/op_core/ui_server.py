@@ -276,6 +276,17 @@ _HTML_PAGE = r"""<!DOCTYPE html>
   .lm-tag.armed {
     color: #bbf7d0; border-color: #22c55e; background: rgba(20, 83, 45, 0.88); font-weight: 700;
   }
+  .heatmap-legend {
+    position: absolute; bottom: 12px; right: 12px; width: 210px;
+    background: rgba(15, 23, 42, 0.88); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 11px; color: var(--text);
+    backdrop-filter: blur(4px); pointer-events: none;
+  }
+  .heatmap-bar {
+    height: 10px; border-radius: 4px; margin: 5px 0 3px 0;
+    background: linear-gradient(90deg, #1d4ed8 0%, #38bdf8 25%, #cbd5e1 50%, #f59e0b 75%, #ef4444 100%);
+  }
+  .heatmap-ticks { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
   table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
   th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border); }
   th:first-child, td:first-child { text-align: left; }
@@ -464,11 +475,14 @@ _HTML_PAGE = r"""<!DOCTYPE html>
     <div class="hud-top">
       <div class="hud-card" id="meshHud">No mesh loaded</div>
       <div class="hud-card row">
-        <select id="renderMode" onchange="drawScene()" style="width:auto; padding:4px 8px;">
+        <select id="renderMode" onchange="onRenderModeChange()" style="width:auto; padding:4px 8px;">
           <option value="solid">Solid Shaded</option>
-          <option value="solid_wire">Solid + Wireframe</option>
-          <option value="wire_only">Wireframe Only</option>
+          <option value="heatmap">Heatmap</option>
+          <option value="wire_only">Surface Hidden</option>
         </select>
+        <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
+          <input type="checkbox" id="chkWireframe" onchange="drawScene()" /> Wireframe
+        </label>
         <label style="font-size:12px; display:flex; align-items:center; gap:4px;">
           <input type="checkbox" id="chkLandmarks" checked onchange="drawScene()" /> Landmarks
         </label>
@@ -486,6 +500,15 @@ _HTML_PAGE = r"""<!DOCTYPE html>
     </div>
     <div class="hud-bottom" id="hudBottom">
       Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark or Custom Mod
+    </div>
+    <div class="heatmap-legend hidden" id="heatmapLegend">
+      <div id="heatmapTitle" style="font-weight:600;">Modification Heatmap (mm)</div>
+      <div class="heatmap-bar"></div>
+      <div class="heatmap-ticks">
+        <span id="hmMin">-8 mm</span>
+        <span id="hmMid">0</span>
+        <span id="hmMax">+8 mm</span>
+      </div>
     </div>
   </section>
 </main>
@@ -1007,6 +1030,8 @@ async function runRectify() {
   const data = await apiJson('/api/rectify', { session_id: state.sessionId, recipe: state.recipe });
   state.rectMesh = data.rectified;
   state.activeMeshKey = 'rect';
+  const sel = document.getElementById('renderMode');
+  if (sel && sel.value === 'solid') sel.value = 'heatmap';
   await refreshDiff();
   uploadMeshToGL();
 }
@@ -1135,12 +1160,104 @@ function initGL() {
   vboOvCol = gl.createBuffer();
 }
 
-function deltaToColor(d) {
-  if (d === undefined || d === null) return [0.78, 0.82, 0.87];
-  if (Math.abs(d) < 0.15) return [0.78, 0.82, 0.87];
-  const t = Math.min(1.0, Math.abs(d) / 5.0);
-  if (d > 0) return [0.78 + 0.20 * t, 0.82 - 0.35 * t, 0.87 - 0.55 * t]; // build-up: warm amber
-  return [0.78 - 0.48 * t, 0.82 - 0.15 * t, 0.87 + 0.10 * t];            // compression: cool blue
+function lerpColor(a, b, t) {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+function divergingHeatmapColor(normVal) {
+  // normVal in [-1, +1]: deep blue -> sky cyan -> light gray -> amber -> crimson red
+  const v = Math.max(-1.0, Math.min(1.0, normVal));
+  const cNeg2 = [0.11, 0.31, 0.85];
+  const cNeg1 = [0.22, 0.74, 0.97];
+  const cZero = [0.80, 0.84, 0.88];
+  const cPos1 = [0.96, 0.62, 0.04];
+  const cPos2 = [0.94, 0.27, 0.27];
+  if (v <= -0.5) return lerpColor(cNeg2, cNeg1, (v + 1.0) / 0.5);
+  if (v < 0.0) return lerpColor(cNeg1, cZero, (v + 0.5) / 0.5);
+  if (v <= 0.5) return lerpColor(cZero, cPos1, v / 0.5);
+  return lerpColor(cPos1, cPos2, (v - 0.5) / 0.5);
+}
+
+function computeMeanCurvatureScores(m) {
+  const nV = m.vertex_count, verts = m.vertices, norms = m.normals, idxs = m.indices;
+  const sumX = new Float32Array(nV), sumY = new Float32Array(nV), sumZ = new Float32Array(nV);
+  const cnt = new Uint16Array(nV);
+  for (let i = 0; i < idxs.length; i += 3) {
+    const a = idxs[i], b = idxs[i + 1], c = idxs[i + 2];
+    const pairs = [[a, b], [b, c], [c, a]];
+    for (const [u, v] of pairs) {
+      sumX[u] += verts[v*3]; sumY[u] += verts[v*3+1]; sumZ[u] += verts[v*3+2]; cnt[u]++;
+      sumX[v] += verts[u*3]; sumY[v] += verts[u*3+1]; sumZ[v] += verts[u*3+2]; cnt[v]++;
+    }
+  }
+  const scores = new Float32Array(nV);
+  for (let i = 0; i < nV; i++) {
+    if (!cnt[i]) continue;
+    const inv = 1.0 / cnt[i];
+    const lx = verts[i*3] - sumX[i]*inv;
+    const ly = verts[i*3+1] - sumY[i]*inv;
+    const lz = verts[i*3+2] - sumZ[i]*inv;
+    // Positive when vertex protrudes outward along its normal (bony prominence), negative in hollows
+    scores[i] = lx * norms[i*3] + ly * norms[i*3+1] + lz * norms[i*3+2];
+  }
+  return scores;
+}
+
+function updateMeshColors() {
+  const m = getDisplayMesh();
+  if (!m || !gl) return;
+  const mode = document.getElementById('renderMode').value;
+  const nVerts = m.vertex_count;
+  const cols = new Float32Array(nVerts * 3);
+  const legend = document.getElementById('heatmapLegend');
+
+  if (mode === 'heatmap') {
+    if (m.deltas && m.deltas.length === nVerts) {
+      const range = 8.0;
+      for (let i = 0; i < nVerts; i++) {
+        const c = divergingHeatmapColor(m.deltas[i] / range);
+        cols[i*3] = c[0]; cols[i*3+1] = c[1]; cols[i*3+2] = c[2];
+      }
+      if (legend) {
+        legend.classList.remove('hidden');
+        document.getElementById('heatmapTitle').textContent = 'Rectification Delta Heatmap';
+        document.getElementById('hmMin').textContent = '-8 mm (Carve)';
+        document.getElementById('hmMid').textContent = '0 mm';
+        document.getElementById('hmMax').textContent = '+8 mm (Add)';
+      }
+    } else {
+      if (!m._curvScores) m._curvScores = computeMeanCurvatureScores(m);
+      const scores = m._curvScores;
+      const scale = 0.45;
+      for (let i = 0; i < nVerts; i++) {
+        const c = divergingHeatmapColor(scores[i] / scale);
+        cols[i*3] = c[0]; cols[i*3+1] = c[1]; cols[i*3+2] = c[2];
+      }
+      if (legend) {
+        legend.classList.remove('hidden');
+        document.getElementById('heatmapTitle').textContent = 'Anatomical Curvature Heatmap';
+        document.getElementById('hmMin').textContent = 'Concave';
+        document.getElementById('hmMid').textContent = 'Flat';
+        document.getElementById('hmMax').textContent = 'Prominent';
+      }
+    }
+  } else {
+    for (let i = 0; i < nVerts; i++) {
+      cols[i*3] = 0.80; cols[i*3+1] = 0.84; cols[i*3+2] = 0.88;
+    }
+    if (legend) legend.classList.add('hidden');
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
+  gl.bufferData(gl.ARRAY_BUFFER, cols, gl.STATIC_DRAW);
+}
+
+function onRenderModeChange() {
+  const mode = document.getElementById('renderMode').value;
+  if (mode === 'wire_only') {
+    document.getElementById('chkWireframe').checked = true;
+  }
+  updateMeshColors();
+  drawScene();
 }
 
 function uploadMeshToGL() {
@@ -1150,17 +1267,11 @@ function uploadMeshToGL() {
     `${state.activeMeshKey.toUpperCase()} · ${m.vertex_count} verts · ${m.face_count} tris`;
   if (!gl) return;
   const nVerts = m.vertex_count;
-  const cols = new Float32Array(nVerts * 3);
-  for (let i = 0; i < nVerts; i++) {
-    const c = deltaToColor(m.deltas ? m.deltas[i] : null);
-    cols[i*3] = c[0]; cols[i*3+1] = c[1]; cols[i*3+2] = c[2];
-  }
   gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(m.vertices), gl.STATIC_DRAW);
   gl.bindBuffer(gl.ARRAY_BUFFER, vboNorm);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(m.normals), gl.STATIC_DRAW);
-  gl.bindBuffer(gl.ARRAY_BUFFER, vboCol);
-  gl.bufferData(gl.ARRAY_BUFFER, cols, gl.STATIC_DRAW);
+  updateMeshColors();
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
   if (extUint && nVerts > 65535) {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(m.indices), gl.STATIC_DRAW);
@@ -1293,20 +1404,22 @@ function drawScene() {
   gl.vertexAttribPointer(locC, 3, gl.FLOAT, false, 0, 0);
 
   const renderMode = document.getElementById('renderMode').value;
-  if (renderMode !== 'wire_only') {
-    if (renderMode === 'solid_wire') {
+  const showWire = document.getElementById('chkWireframe') && document.getElementById('chkWireframe').checked;
+  const showSurface = renderMode !== 'wire_only';
+  if (showSurface) {
+    if (showWire) {
       gl.enable(gl.POLYGON_OFFSET_FILL);
       gl.polygonOffset(1.0, 1.0);
     }
     gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), 0.0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
     gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
-    if (renderMode === 'solid_wire') {
+    if (showWire) {
       gl.disable(gl.POLYGON_OFFSET_FILL);
     }
   }
-  if ((renderMode === 'solid_wire' || renderMode === 'wire_only') && wireIndexCount > 0) {
-    gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), renderMode === 'wire_only' ? 2.0 : 1.0);
+  if (showWire && wireIndexCount > 0) {
+    gl.uniform1f(gl.getUniformLocation(prog, 'uWire'), showSurface ? 1.0 : 2.0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, iboWire);
     gl.drawElements(gl.LINES, wireIndexCount, wireIndexType, 0);
   }
