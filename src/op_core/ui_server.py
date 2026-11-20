@@ -222,10 +222,22 @@ _HTML_PAGE = r"""<!DOCTYPE html>
   label.field .lbl { display: flex; justify-content: space-between; color: var(--text); }
   label.field .val { color: var(--accent); font-family: monospace; }
   input[type="range"] { width: 100%; accent-color: var(--accent); }
-  select, input[type="file"] {
+  select, input[type="file"], input[type="text"], input[type="number"] {
     background: var(--bg); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 6px 8px; font-size: 12px; width: 100%;
   }
+  .btn.sm { padding: 3px 8px; font-size: 11px; }
+  .btn.danger { background: rgba(239,68,68,0.22); color: #fca5a5; border: 1px solid var(--bad); }
+  .mod-box {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; margin-bottom: 8px;
+  }
+  .mod-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--text);
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+  .hud-bottom.armed { border-color: var(--accent); color: #fff; background: rgba(2, 132, 199, 0.88); }
   table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
   th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border); }
   th:first-child, td:first-child { text-align: left; }
@@ -296,6 +308,57 @@ _HTML_PAGE = r"""<!DOCTYPE html>
         </div>
       </div>
       <div class="card">
+        <h2>+ Add Custom Modification</h2>
+        <p class="mono" style="margin-top:0;">Click anywhere on the 3D limb to place a custom relief/build-up pad, or add an arbitrary Z-height band.</p>
+        <div class="mod-box">
+          <div class="mod-head"><span>Custom Surface Patch</span></div>
+          <label class="field">
+            <span class="lbl"><span>Patch Label</span></span>
+            <input type="text" id="custLabel" placeholder="e.g. navicular_relief" />
+          </label>
+          <div class="grid-2">
+            <label class="field" style="margin-bottom:0;">
+              <span class="lbl"><span>Offset (mm)</span></span>
+              <input type="number" id="custOffset" value="4.0" min="-12" max="12" step="0.5" />
+            </label>
+            <label class="field" style="margin-bottom:0;">
+              <span class="lbl"><span>Radius (mm)</span></span>
+              <input type="number" id="custRadius" value="22.0" min="8" max="60" step="1" />
+            </label>
+          </div>
+          <label class="field">
+            <span class="lbl"><span>Contour Falloff</span></span>
+            <select id="custFalloff">
+              <option value="gaussian">Smooth Gaussian</option>
+              <option value="flat_pad">Flat Plateau Pad</option>
+            </select>
+          </label>
+          <button class="btn" id="btnArmCustomMod" style="width:100%;" onclick="armCustomMod()">Click 3D Mesh to Place & Apply</button>
+        </div>
+        <div class="mod-box" style="margin-bottom:0;">
+          <div class="mod-head"><span>Custom Z-Height Zone</span></div>
+          <label class="field">
+            <span class="lbl"><span>Zone Label</span></span>
+            <input type="text" id="custZoneLabel" placeholder="e.g. distal_flare" />
+          </label>
+          <div class="grid-2">
+            <label class="field" style="margin-bottom:0;">
+              <span class="lbl"><span>Z Min (mm)</span></span>
+              <input type="number" id="custZMin" value="-160" step="5" />
+            </label>
+            <label class="field" style="margin-bottom:0;">
+              <span class="lbl"><span>Z Max (mm)</span></span>
+              <input type="number" id="custZMax" value="-90" step="5" />
+            </label>
+          </div>
+          <label class="field">
+            <span class="lbl"><span>Radial Change (%)</span></span>
+            <input type="number" id="custZonePct" value="3.0" min="-15" max="15" step="0.5" />
+          </label>
+          <button class="btn secondary" style="width:100%;" onclick="addCustomZone()">+ Add Z-Zone & Apply</button>
+        </div>
+      </div>
+      <div class="card">
         <h2>Revision Diff vs. Intake Baseline</h2>
         <pre id="diffWrap" class="mono" style="margin:0; white-space:pre-wrap;">No parameter edits yet.</pre>
       </div>
@@ -343,8 +406,8 @@ _HTML_PAGE = r"""<!DOCTYPE html>
         <button class="btn secondary" onclick="resetCamera()">Reset View</button>
       </div>
     </div>
-    <div class="hud-bottom">
-      Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Pick Landmark (Step 2): Click surface
+    <div class="hud-bottom" id="hudBottom">
+      Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark or Custom Mod
     </div>
   </section>
 </main>
@@ -359,10 +422,26 @@ const state = {
   shellMesh: null,
   activeMeshKey: 'base',
   armedLandmark: null,
+  armedCustomMod: null,
   lint: null,
   downloads: null,
   cam: { yaw: 0.55, pitch: 0.3, dist: 380, target: [0, 0, -60] }
 };
+
+function updateHudHint() {
+  const el = document.getElementById('hudBottom');
+  if (!el) return;
+  if (state.armedCustomMod) {
+    el.classList.add('armed');
+    el.textContent = `PLACE CUSTOM MOD "${state.armedCustomMod.label}": Click directly on the 3D limb surface (or click button again to cancel).`;
+  } else if (state.armedLandmark) {
+    el.classList.add('armed');
+    el.textContent = `PICK LANDMARK "${state.armedLandmark}": Click directly on the 3D limb surface.`;
+  } else {
+    el.classList.remove('armed');
+    el.textContent = 'Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark or Custom Mod';
+  }
+}
 
 document.querySelectorAll('.step-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -370,6 +449,8 @@ document.querySelectorAll('.step-btn').forEach(btn => {
     document.querySelectorAll('.step-btn').forEach(b => b.classList.toggle('active', b === btn));
     document.querySelectorAll('.step-pane').forEach(p => p.classList.toggle('hidden', p.id !== 'step-' + step));
     if (step !== '2') { state.armedLandmark = null; renderLandmarks(); }
+    if (step !== '3') { state.armedCustomMod = null; refreshCustomModButton(); }
+    updateHudHint();
   });
 });
 
@@ -475,9 +556,85 @@ function renderLandmarks() {
 }
 
 function armLandmark(name) {
+  state.armedCustomMod = null;
+  refreshCustomModButton();
   state.armedLandmark = (state.armedLandmark === name) ? null : name;
   renderLandmarks();
+  updateHudHint();
   drawScene();
+}
+
+function refreshCustomModButton() {
+  const btn = document.getElementById('btnArmCustomMod');
+  if (!btn) return;
+  if (state.armedCustomMod) {
+    btn.classList.add('ok');
+    btn.textContent = 'Click 3D Mesh Surface Now... (Cancel)';
+  } else {
+    btn.classList.remove('ok');
+    btn.textContent = 'Click 3D Mesh to Place & Apply';
+  }
+}
+
+function sanitizeModName(raw, prefix) {
+  const cleaned = (raw || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  if (cleaned) return cleaned;
+  let n = 1;
+  while (state.recipe.landmarks && state.recipe.landmarks[`${prefix}_${n}`]) n++;
+  return `${prefix}_${n}`;
+}
+
+function armCustomMod() {
+  if (!state.recipe) return;
+  if (state.armedCustomMod) {
+    state.armedCustomMod = null;
+    refreshCustomModButton();
+    updateHudHint();
+    return;
+  }
+  state.armedLandmark = null;
+  renderLandmarks();
+  const label = sanitizeModName(document.getElementById('custLabel').value, 'custom_pad');
+  const offset = Number(document.getElementById('custOffset').value || 0);
+  const radius = Math.max(8, Number(document.getElementById('custRadius').value || 22));
+  const falloff = document.getElementById('custFalloff').value || 'gaussian';
+  state.armedCustomMod = { label, offset_mm: offset, radius_mm: radius, falloff };
+  refreshCustomModButton();
+  updateHudHint();
+}
+
+function addCustomZone() {
+  if (!state.recipe) return;
+  const label = sanitizeModName(document.getElementById('custZoneLabel').value, 'custom_zone');
+  const z0 = Number(document.getElementById('custZMin').value);
+  const z1 = Number(document.getElementById('custZMax').value);
+  const lo = Math.min(z0, z1), hi = Math.max(z0, z1);
+  const pct = Number(document.getElementById('custZonePct').value || 0);
+  state.recipe.operations.push({
+    op: 'zoned_compression',
+    id: label,
+    z_range_mm: [lo, hi],
+    percent: pct,
+    transition_mm: 18.0
+  });
+  document.getElementById('custZoneLabel').value = '';
+  renderRectifyControls();
+  runRectify();
+}
+
+function removeOperation(idx) {
+  if (!state.recipe || !state.recipe.operations[idx]) return;
+  const [removed] = state.recipe.operations.splice(idx, 1);
+  if (removed && removed.op === 'landmark_relief' && removed.landmark && state.recipe.landmarks) {
+    const stillUsed = state.recipe.operations.some(o => o.landmark === removed.landmark);
+    const coreLms = new Set(['pt_bar', 'fibular_head', 'tibial_crest', 'popliteal', 'medial_malleolus', 'lateral_malleolus', 'ischial_shelf', 'scarpas_triangle', 'trochanter']);
+    if (!stillUsed && !coreLms.has(removed.landmark)) {
+      delete state.recipe.landmarks[removed.landmark];
+      renderLandmarks();
+    }
+  }
+  renderRectifyControls();
+  runRectify();
 }
 
 function sliderField(id, label, min, max, step, val, unit, onChange) {
@@ -497,12 +654,38 @@ function renderRectifyControls() {
       'v => { state.recipe.liner_thickness_mm = v; }');
   }
   r.operations.forEach((op, idx) => {
-    if (op.op === 'global_compression' || op.op === 'zoned_compression') {
-      html += sliderField('op_' + idx, op.id + ' (%)', -10, 5, 0.5, op.percent, '%',
+    if (op.op === 'global_compression') {
+      html += sliderField('op_' + idx, op.id + ' (%)', -12, 8, 0.5, op.percent, '%',
         `v => { state.recipe.operations[${idx}].percent = v; }`);
+    } else if (op.op === 'zoned_compression') {
+      const zr = op.z_range_mm || [-200, -100];
+      html += `<div class="mod-box">
+        <div class="mod-head">
+          <span>${op.id} <span class="mono">Z[${zr[0]}..${zr[1]} mm]</span></span>
+          <button class="btn sm danger" onclick="removeOperation(${idx})">Remove</button>
+        </div>
+        ${sliderField('op_' + idx, 'Radial Zone (%)', -15, 15, 0.5, op.percent, '%',
+          `v => { state.recipe.operations[${idx}].percent = v; }`)}
+      </div>`;
     } else if (op.op === 'landmark_relief') {
-      html += sliderField('op_' + idx, op.landmark + ' relief', -10, 10, 0.5, op.offset_mm, 'mm',
-        `v => { state.recipe.operations[${idx}].offset_mm = v; }`);
+      const fall = op.falloff || 'gaussian';
+      html += `<div class="mod-box">
+        <div class="mod-head">
+          <span>${op.landmark}</span>
+          <button class="btn sm danger" onclick="removeOperation(${idx})">Remove</button>
+        </div>
+        ${sliderField('op_' + idx, 'Offset', -12, 12, 0.5, op.offset_mm, 'mm',
+          `v => { state.recipe.operations[${idx}].offset_mm = v; }`)}
+        ${sliderField('op_r_' + idx, 'Radius', 8, 60, 1, op.radius_mm ?? 22.0, 'mm',
+          `v => { state.recipe.operations[${idx}].radius_mm = v; }`)}
+        <label class="field" style="margin-bottom:0;">
+          <span class="lbl"><span>Falloff Profile</span></span>
+          <select onchange="state.recipe.operations[${idx}].falloff = this.value;">
+            <option value="gaussian" ${fall === 'gaussian' ? 'selected' : ''}>Smooth Gaussian</option>
+            <option value="flat_pad" ${fall === 'flat_pad' ? 'selected' : ''}>Flat Plateau Pad</option>
+          </select>
+        </label>
+      </div>`;
     } else if (op.op === 'afo_posture') {
       html += sliderField('op_df_' + idx, 'Dorsiflexion correction', -15, 25, 1, op.dorsiflexion_deg, '°',
         `v => { state.recipe.operations[${idx}].dorsiflexion_deg = v; }`);
@@ -525,6 +708,9 @@ function renderShellControls() {
   html += sliderField('wp', 'Proximal Brim / Calf Wall', 2.0, 5.0, 0.5, sh.wall_proximal_mm ?? 2.5, 'mm',
     'v => { state.recipe.shell.wall_proximal_mm = v; }');
   if (r.device_type !== 'afo') {
+    const defTrim = r.device_type === 'transfemoral_socket' ? 45.0 : 38.0;
+    html += sliderField('trimz', 'Proximal Socket Trim Z', 15, 75, 1, sh.proximal_trim_z_mm ?? defTrim, 'mm',
+      'v => { state.recipe.shell.proximal_trim_z_mm = v; }');
     html += sliderField('flex', 'Bench Alignment Flexion', -5, 15, 0.5, al.flexion_deg ?? 5.0, '°',
       'v => { state.recipe.alignment.flexion_deg = v; }');
     html += sliderField('add', 'Bench Alignment Adduction', -5, 15, 0.5, al.adduction_deg ?? 5.0, '°',
@@ -945,11 +1131,33 @@ function pickSurfacePoint(clientX, clientY) {
 let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
 canvas.addEventListener('mousedown', e => { dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY; });
 window.addEventListener('mouseup', e => {
-  if (dragging && !dragMoved && state.armedLandmark) {
+  if (dragging && !dragMoved && state.armedCustomMod) {
+    const pt = pickSurfacePoint(e.clientX, e.clientY);
+    if (pt) {
+      const cfg = state.armedCustomMod;
+      state.recipe.landmarks[cfg.label] = { xyz: pt.map(v => Number(v.toFixed(2))) };
+      state.recipe.operations.push({
+        op: 'landmark_relief',
+        id: 'mod_' + cfg.label,
+        landmark: cfg.label,
+        offset_mm: cfg.offset_mm,
+        radius_mm: cfg.radius_mm,
+        falloff: cfg.falloff
+      });
+      state.armedCustomMod = null;
+      document.getElementById('custLabel').value = '';
+      refreshCustomModButton();
+      updateHudHint();
+      renderLandmarks();
+      renderRectifyControls();
+      runRectify();
+    }
+  } else if (dragging && !dragMoved && state.armedLandmark) {
     const pt = pickSurfacePoint(e.clientX, e.clientY);
     if (pt) {
       state.recipe.landmarks[state.armedLandmark] = { xyz: pt.map(v => Number(v.toFixed(2))) };
       state.armedLandmark = null;
+      updateHudHint();
       renderLandmarks();
       drawScene();
     }

@@ -39,16 +39,36 @@ class TestUIServer(unittest.TestCase):
         th.start()
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            # 1. Index HTML + Health
+            # 1. Index HTML + Health + new UI controls present
             html = opener.open(f"{base}/").read().decode("utf-8")
             self.assertIn("op-core 3D Clinical Workstation", html)
+            for token in ('id="renderMode"', "wire_only", "uKeyLightDir", "armCustomMod", "addCustomZone"):
+                self.assertIn(token, html)
             health = json.loads(opener.open(f"{base}/api/health").read().decode("utf-8"))
             self.assertEqual(health["status"], "ok")
 
-            # 2. Sample TT session -> Rectify -> Build -> Download
+            # 2. Sample TT session (full limb) -> Custom Mods -> Rectify -> Diff -> Build -> Download
             sample = json.loads(opener.open(f"{base}/api/sample?device=tt").read().decode("utf-8"))
             sid = sample["session_id"]
             self.assertGreater(sample["mesh"]["vertex_count"], 500)
+            self.assertGreater(sample["mesh"]["bounds"]["max"][2], 100.0)
+
+            sample["recipe"]["landmarks"]["custom_navicular"] = {"xyz": [18.0, -5.0, -55.0]}
+            sample["recipe"]["operations"].append({
+                "op": "landmark_relief",
+                "id": "mod_custom_navicular",
+                "landmark": "custom_navicular",
+                "offset_mm": 6.5,
+                "radius_mm": 28.0,
+                "falloff": "flat_pad",
+            })
+            sample["recipe"]["operations"].append({
+                "op": "zoned_compression",
+                "id": "custom_mid_flare",
+                "z_range_mm": [-150.0, -90.0],
+                "percent": 3.5,
+                "transition_mm": 18.0,
+            })
 
             req_rect = urllib.request.Request(
                 f"{base}/api/rectify",
@@ -58,6 +78,8 @@ class TestUIServer(unittest.TestCase):
             )
             rect_data = json.loads(opener.open(req_rect).read().decode("utf-8"))
             self.assertEqual(len(rect_data["rectified"]["deltas"]), sample["mesh"]["vertex_count"])
+            # +6.5 mm custom flat pad + 3.5% zone flare exceeds global -3.0 mm liner - 3% compression
+            self.assertGreater(max(rect_data["rectified"]["deltas"]), 2.5)
 
             sample["recipe"]["liner_thickness_mm"] = 4.0
             req_diff = urllib.request.Request(
@@ -68,6 +90,7 @@ class TestUIServer(unittest.TestCase):
             )
             diff_data = json.loads(opener.open(req_diff).read().decode("utf-8"))
             self.assertIn("liner_thickness_mm", diff_data["diff"])
+            self.assertIn("operations", diff_data["diff"])
 
             req_build = urllib.request.Request(
                 f"{base}/api/build",
@@ -77,6 +100,7 @@ class TestUIServer(unittest.TestCase):
             )
             build_data = json.loads(opener.open(req_build).read().decode("utf-8"))
             self.assertTrue(build_data["lint"]["passed"])
+            self.assertLessEqual(build_data["shell"]["bounds"]["max"][2], 45.0)
             self.assertIn("Slicer 3MF (device_orcaslicer.3mf)", build_data["downloads"])
             self.assertIn("Dossier PDF (device_dossier.pdf)", build_data["downloads"])
 

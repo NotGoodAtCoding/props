@@ -183,20 +183,35 @@ def apply_recipe(canonical_mesh: TriMesh, recipe: OpRecipe) -> RectificationResu
     geodesic_cache: dict[int, list[float]] = {}
     for op in recipe.operations:
         if op["op"] == "landmark_relief":
-            lm_name = op["landmark"]
-            if lm_name not in resolved_landmarks:
+            lm_name = op.get("landmark", "")
+            if lm_name in resolved_landmarks:
+                seed_idx = resolved_landmarks[lm_name]
+            elif "xyz" in op:
+                xyz = tuple(float(c) for c in op["xyz"])
+                seed_idx = m0.nearest_vertex(xyz)  # type: ignore[arg-type]
+            else:
                 raise KeyError(f"Landmark {lm_name!r} not found in recipe landmarks")
-            seed_idx = resolved_landmarks[lm_name]
             if seed_idx not in geodesic_cache:
                 geodesic_cache[seed_idx] = m0.geodesic_distances([seed_idx])
             dists = geodesic_cache[seed_idx]
             offset = float(op["offset_mm"])
             radius = max(1.0, float(op.get("radius_mm", 22.0)))
-            sigma = radius * 0.48
-            inv_2s2 = 0.5 / (sigma * sigma)
-            for i, d in enumerate(dists):
-                if d < radius * 2.2:
-                    relief_mm[i] += offset * math.exp(-d * d * inv_2s2)
+            falloff = str(op.get("falloff", "gaussian"))
+            if falloff == "flat_pad":
+                inner_r = 0.45 * radius
+                outer_r = max(inner_r + 1.0, radius)
+                for i, d in enumerate(dists):
+                    if d <= inner_r:
+                        relief_mm[i] += offset
+                    elif d < outer_r:
+                        t_pad = (d - inner_r) / (outer_r - inner_r)
+                        relief_mm[i] += offset * (1.0 - smoothstep5(t_pad))
+            else:
+                sigma = radius * 0.48
+                inv_2s2 = 0.5 / (sigma * sigma)
+                for i, d in enumerate(dists):
+                    if d < radius * 2.2:
+                        relief_mm[i] += offset * math.exp(-d * d * inv_2s2)
 
     final_verts = [
         v_add(base_verts[i], v_scale(n0[i], relief_mm[i]))
