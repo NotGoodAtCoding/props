@@ -128,29 +128,29 @@ def generate_transtibial_limb(
             tri_shape = -1.6 * tri_w * math.cos(3.0 * theta)
 
             # --- Sculpted Anatomical Knee & Patella ---
-            # Shield-shaped patella (wider at superior base z~44, tapering cleanly to apex at z~16)
-            pat_z_rel = (z - 33.0) / 17.5
-            # Narrow angular half-width inferiorly, broader superiorly for true shield/inverted-triangle kneecap
-            pat_ang_w = 0.24 + 0.11 * max(-1.0, min(1.0, (z - 26.0) / 18.0))
-            pat_u = math.hypot(d_ant / max(0.14, pat_ang_w), pat_z_rel)
-            # Smooth flat-topped super-Gaussian cap so anterior patellar face catches light cleanly
-            pat_amp = 12.0 if is_full_knee else 8.0
-            patella = pat_amp * math.exp(-(pat_u ** 2.6) * 0.95) if st > 0.25 else 0.0
+            # Broad, flatter shield-shaped patella (~46-50 mm wide, wider superiorly, tapering to apex)
+            pat_z_rel = (z - 33.0) / 18.5
+            pat_ang_w = 0.44 + 0.12 * max(-1.0, min(1.0, (z - 28.0) / 18.0))
+            pat_u = math.hypot(d_ant / max(0.20, pat_ang_w), pat_z_rel)
+            pat_w = math.exp(-(pat_u ** 3.6) * 1.1) if st > 0.25 else 0.0
+            # Low-profile anterior projection compensated across d_ant so the patellar face reads broad & flat
+            pat_center_mm = 5.8 if is_full_knee else 4.8
+            pat_flat_comp = (12.0 if is_full_knee else 8.0) * (1.0 - math.cos(d_ant))
+            patella = (pat_center_mm + pat_flat_comp) * pat_w
 
-            # Peripatellar & infrapatellar gutters flanking the patella and patellar tendon
-            # (deep medial/lateral knee dimples that make the kneecap visually unmistakable)
+            # Peripatellar & infrapatellar gutters framing the broader patella & patellar tendon
             gutter_ang = (
-                math.exp(-((d_ant - 0.48) / 0.19) ** 2)
-                + math.exp(-((d_ant + 0.48) / 0.19) ** 2)
+                math.exp(-((d_ant - 0.66) / 0.20) ** 2)
+                + math.exp(-((d_ant + 0.66) / 0.20) ** 2)
             )
             gutter_z = math.exp(-((z - 12.0) / 24.0) ** 2)
-            knee_gutters = (-5.8 if is_full_knee else -2.6) * gutter_ang * gutter_z
+            knee_gutters = (-3.8 if is_full_knee else -2.2) * gutter_ang * gutter_z
 
-            # Suprapatellar dip just above superior pole of patella (z ~ +58 mm, anterior)
+            # Gentle suprapatellar dip above superior pole of patella (z ~ +60 mm, anterior)
             supra_dip = (
-                -4.4
-                * math.exp(-((d_ant / 0.36) ** 2))
-                * math.exp(-((z - 59.0) / 11.0) ** 2)
+                -2.8
+                * math.exp(-((d_ant / 0.48) ** 2))
+                * math.exp(-((z - 60.0) / 12.0) ** 2)
                 if is_full_knee
                 else 0.0
             )
