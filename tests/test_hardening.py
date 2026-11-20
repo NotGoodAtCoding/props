@@ -87,10 +87,41 @@ class TestHardening(unittest.TestCase):
             import json
             resp = json.loads(opener.open(f"http://127.0.0.1:{port}/api/sample?device=tf").read().decode("utf-8"))
             self.assertEqual(resp["recipe"]["device_type"], "transfemoral_socket")
+            self.assertEqual(resp["qa"]["status"], "PASS")
+            self.assertGreater(resp["mesh"]["bounds"]["max"][2], 80.0)
         finally:
             server.shutdown()
             server.server_close()
             store.close_all()
+
+    def test_full_closed_limb_scans_trim_cleanly_to_socket_shells(self) -> None:
+        from op_core.scan_qa import run_scan_qa
+        from op_core.synthetic import generate_transfemoral_limb
+
+        tt_full = generate_transtibial_limb(open_cuff=False, include_knee_thigh=True, seed=0)
+        self.assertTrue(tt_full.mesh.is_watertight_manifold())
+        self.assertGreater(tt_full.mesh.bounds()[1][2], 100.0)
+        aligned_tt, qa_tt = run_scan_qa(
+            tt_full.mesh,
+            mpt_point=tt_full.landmark_coords["mpt"],
+            distal_point=tt_full.landmark_coords["distal_end"],
+        )
+        self.assertEqual(qa_tt.status, "PASS", qa_tt.errors)
+        tt_sh = build_tt_socket_shell(aligned_tt, proximal_trim_z_mm=38.0)
+        self.assertTrue(tt_sh.shell_mesh.is_watertight_manifold(), tt_sh.shell_mesh.edge_topology())
+        self.assertLessEqual(tt_sh.shell_mesh.bounds()[1][2], 45.0)
+
+        tf_full = generate_transfemoral_limb(open_cuff=False, seed=7)
+        self.assertTrue(tf_full.mesh.is_watertight_manifold())
+        aligned_tf, qa_tf = run_scan_qa(
+            tf_full.mesh,
+            mpt_point=tf_full.landmark_coords["mpt"],
+            distal_point=tf_full.landmark_coords["distal_end"],
+        )
+        self.assertEqual(qa_tf.status, "PASS", qa_tf.errors)
+        tf_sh = build_tf_socket_shell(aligned_tf, proximal_trim_z_mm=45.0)
+        self.assertTrue(tf_sh.shell_mesh.is_watertight_manifold(), tf_sh.shell_mesh.edge_topology())
+        self.assertLessEqual(tf_sh.shell_mesh.bounds()[1][2], 52.0)
 
     def test_fetch_openlimb_normalizer_scales_fractional_mesh(self) -> None:
         from scripts.fetch_openlimb import normalize_openlimb_stl

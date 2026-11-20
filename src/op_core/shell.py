@@ -301,6 +301,16 @@ def _build_captive_m6_pyramid_boss_cap(
     return verts, faces, top_ring_idx
 
 
+def _clip_to_socket_trimline(mesh: TriMesh, proximal_trim_z_mm: float | None) -> TriMesh:
+    """Clip a full limb mesh downward at the proximal socket trimline when it extends above it."""
+    if proximal_trim_z_mm is None:
+        return mesh
+    _, bmax = mesh.bounds()
+    if bmax[2] <= proximal_trim_z_mm + 5.0:
+        return mesh
+    return clip_mesh_z(mesh, z_cut=proximal_trim_z_mm, keep_above=False)
+
+
 def _build_socket_shell_core(
     rectified_positive: TriMesh,
     wall_distal_mm: float,
@@ -310,9 +320,11 @@ def _build_socket_shell_core(
     brim_round_segments: int,
     hardware_tag: str,
     alignment_type: str,
+    proximal_trim_z_mm: float | None = None,
 ) -> ShellBuildResult:
     """Arbitrary-mesh socket shell builder using planar distal clipping + unequal-ring manifold bridging."""
-    pos, _ = repair_scan_mesh(rectified_positive, fill_holes=True, ensure_open_cuff=True)
+    trimmed = _clip_to_socket_trimline(rectified_positive, proximal_trim_z_mm)
+    pos, _ = repair_scan_mesh(trimmed, fill_holes=True, ensure_open_cuff=True)
     loops = pos.boundary_loops()
     if len(loops) != 1:
         raise ValueError(f"Expected 1 proximal cuff loop after repair, found {len(loops)}")
@@ -442,6 +454,7 @@ def build_tt_socket_shell(
     flexion_deg: float = 5.0,
     adduction_deg: float = 5.0,
     brim_round_segments: int = 3,
+    proximal_trim_z_mm: float | None = None,
 ) -> ShellBuildResult:
     """Build a watertight TT socket shell with rounded brim and MPT-aligned captive-M6 pyramid boss."""
     return _build_socket_shell_core(
@@ -453,6 +466,7 @@ def build_tt_socket_shell(
         brim_round_segments=brim_round_segments,
         hardware_tag="pyramid_50_8_m6_captive",
         alignment_type="tt_mpt_bisection_plumb_line",
+        proximal_trim_z_mm=proximal_trim_z_mm,
     )
 
 
@@ -463,6 +477,7 @@ def build_tf_socket_shell(
     flexion_deg: float = 5.0,
     adduction_deg: float = 8.0,
     brim_round_segments: int = 3,
+    proximal_trim_z_mm: float | None = None,
 ) -> ShellBuildResult:
     """Build a watertight transfemoral (TF) socket shell with TKA-aligned captive-M6 pyramid boss."""
     return _build_socket_shell_core(
@@ -474,6 +489,7 @@ def build_tf_socket_shell(
         brim_round_segments=brim_round_segments,
         hardware_tag="pyramid_50_8_m6_captive",
         alignment_type="tf_tka_plumb_line",
+        proximal_trim_z_mm=proximal_trim_z_mm,
     )
 
 
@@ -644,9 +660,11 @@ def export_carver_positive(
     collar_height_mm: float = 40.0,
     mandrel_radius_mm: float = 12.7,
     bore_depth_mm: float = 95.0,
+    proximal_trim_z_mm: float | None = None,
 ) -> CarverPositiveResult:
     """Convert any rectified positive (open or closed) into a watertight CNC foam-carver mold."""
-    pos, _ = repair_scan_mesh(rectified_positive, fill_holes=True, ensure_open_cuff=True)
+    trimmed = _clip_to_socket_trimline(rectified_positive, proximal_trim_z_mm)
+    pos, _ = repair_scan_mesh(trimmed, fill_holes=True, ensure_open_cuff=True)
     loops = pos.boundary_loops()
     if len(loops) != 1:
         raise ValueError(f"Carver prep expects 1 proximal cuff loop, found {len(loops)}")
