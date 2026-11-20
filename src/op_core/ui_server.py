@@ -339,6 +339,42 @@ _HTML_PAGE = r"""<!DOCTYPE html>
 
     <div id="step-3" class="step-pane hidden">
       <div class="card">
+        <h2>Interactive Sculpt & Smooth</h2>
+        <p class="mono" style="margin-top:0;">Paint directly on the smooth 3D mesh to add build-up, carve relief, or localize Taubin smoothing (Right-drag or Shift+drag orbits while painting).</p>
+        <div class="row" style="margin-bottom:8px;">
+          <button class="btn secondary sm" id="btnSculptAdd" style="flex:1;" onclick="toggleSculptTool('add')">+ Add</button>
+          <button class="btn secondary sm" id="btnSculptRem" style="flex:1;" onclick="toggleSculptTool('remove')">− Remove</button>
+          <button class="btn secondary sm" id="btnSculptSmooth" style="flex:1;" onclick="toggleSculptTool('smooth')">≈ Smooth Brush</button>
+        </div>
+        <div class="grid-2">
+          <label class="field" style="margin-bottom:0;">
+            <span class="lbl"><span>Depth / Mag (mm)</span></span>
+            <input type="number" id="sculptOffset" value="3.5" min="0.5" max="12" step="0.5" />
+          </label>
+          <label class="field" style="margin-bottom:0;">
+            <span class="lbl"><span>Brush Radius (mm)</span></span>
+            <input type="number" id="sculptRadius" value="22.0" min="8" max="60" step="1" />
+          </label>
+        </div>
+        <div class="grid-2" style="margin-top:6px;">
+          <label class="field" style="margin-bottom:0;">
+            <span class="lbl"><span>Brush Falloff</span></span>
+            <select id="sculptFalloff">
+              <option value="gaussian">Smooth Gaussian</option>
+              <option value="flat_pad">Flat Plateau Pad</option>
+            </select>
+          </label>
+          <label class="field" style="margin-bottom:0;">
+            <span class="lbl"><span>Smooth Passes</span></span>
+            <input type="number" id="smoothIters" value="4" min="1" max="15" step="1" />
+          </label>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn secondary sm" style="flex:1;" onclick="addGlobalSmooth()">≈ Smooth Entire Mesh (Taubin)</button>
+          <button class="btn danger sm" onclick="undoLastOperation()">Undo Last</button>
+        </div>
+      </div>
+      <div class="card">
         <h2>Non-Destructive Rectification (M_0)</h2>
         <div id="rectifyControls"></div>
         <div class="row" style="margin-top:8px;">
@@ -466,6 +502,8 @@ const state = {
   armedLandmark: null,
   armedCustomMod: null,
   armedTrimlineDraw: false,
+  sculptTool: null, // 'add' | 'remove' | 'smooth' | null
+  activeStrokePoints: [],
   lint: null,
   downloads: null,
   cam: { yaw: 0.55, pitch: 0.3, dist: 380, target: [0, 0, -60] }
@@ -482,7 +520,11 @@ const TRIMLINE_PRESETS = {
 function updateHudHint() {
   const el = document.getElementById('hudBottom');
   if (!el) return;
-  if (state.armedTrimlineDraw) {
+  if (state.sculptTool) {
+    const names = { add: '+ ADD BUILD-UP', remove: '− REMOVE / CARVE', smooth: '≈ LOCAL TAUBIN SMOOTH' };
+    el.classList.add('armed');
+    el.textContent = `SCULPT BRUSH (${names[state.sculptTool]}): Left-click or drag on 3D mesh to paint · Right-drag to orbit · Click active brush button to stop.`;
+  } else if (state.armedTrimlineDraw) {
     const n = (state.recipe && state.recipe.shell && state.recipe.shell.trimline && state.recipe.shell.trimline.points) ? state.recipe.shell.trimline.points.length : 0;
     el.classList.add('armed');
     el.textContent = `DRAW TRIM LINE (${n} pts): Click around the 3D limb surface to place socket cut points (>= 3 pts forms closed cut contour).`;
@@ -494,8 +536,57 @@ function updateHudHint() {
     el.textContent = `PICK LANDMARK "${state.armedLandmark}": Click directly on the 3D limb surface.`;
   } else {
     el.classList.remove('armed');
-    el.textContent = 'Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark, Custom Mod, or Trim Line';
+    el.textContent = 'Orbit: Left-drag · Zoom: Scroll · Pan: Shift+Drag · Click surface when placing Landmark, Custom Mod, Sculpt Brush, or Trim Line';
   }
+}
+
+function refreshSculptButtons() {
+  const map = { add: 'btnSculptAdd', remove: 'btnSculptRem', smooth: 'btnSculptSmooth' };
+  for (const [mode, id] of Object.entries(map)) {
+    const b = document.getElementById(id);
+    if (!b) continue;
+    const active = state.sculptTool === mode;
+    b.classList.toggle('ok', active);
+    b.classList.toggle('secondary', !active);
+  }
+}
+
+function toggleSculptTool(mode) {
+  if (!state.recipe) return;
+  state.armedLandmark = null;
+  state.armedCustomMod = null;
+  state.armedTrimlineDraw = false;
+  refreshCustomModButton();
+  state.sculptTool = (state.sculptTool === mode) ? null : mode;
+  state.activeStrokePoints = [];
+  if (state.sculptTool && state.activeMeshKey === 'shell') {
+    document.getElementById('chkShell').checked = false;
+    state.activeMeshKey = state.rectMesh ? 'rect' : 'base';
+    uploadMeshToGL();
+  }
+  refreshSculptButtons();
+  updateHudHint();
+  drawScene();
+}
+
+function addGlobalSmooth() {
+  if (!state.recipe) return;
+  const iters = Math.max(1, Math.min(20, parseInt(document.getElementById('smoothIters').value || '4', 10)));
+  let n = 1;
+  while (state.recipe.operations.some(o => o.id === 'smooth_global_' + n)) n++;
+  state.recipe.operations.push({
+    op: 'smooth',
+    id: 'smooth_global_' + n,
+    iterations: iters,
+    strength: 0.55
+  });
+  renderRectifyControls();
+  runRectify();
+}
+
+function undoLastOperation() {
+  if (!state.recipe || !state.recipe.operations.length) return;
+  removeOperation(state.recipe.operations.length - 1);
 }
 
 document.querySelectorAll('.step-btn').forEach(btn => {
@@ -504,7 +595,13 @@ document.querySelectorAll('.step-btn').forEach(btn => {
     document.querySelectorAll('.step-btn').forEach(b => b.classList.toggle('active', b === btn));
     document.querySelectorAll('.step-pane').forEach(p => p.classList.toggle('hidden', p.id !== 'step-' + step));
     if (step !== '2') { state.armedLandmark = null; renderLandmarks(); }
-    if (step !== '3') { state.armedCustomMod = null; refreshCustomModButton(); }
+    if (step !== '3') {
+      state.armedCustomMod = null;
+      state.sculptTool = null;
+      state.activeStrokePoints = [];
+      refreshCustomModButton();
+      refreshSculptButtons();
+    }
     if (step !== '4') { state.armedTrimlineDraw = false; renderShellControls(); }
     updateHudHint();
   });
@@ -741,6 +838,41 @@ function renderRectifyControls() {
             <option value="flat_pad" ${fall === 'flat_pad' ? 'selected' : ''}>Flat Plateau Pad</option>
           </select>
         </label>
+      </div>`;
+    } else if (op.op === 'sculpt_stroke') {
+      const fall = op.falloff || 'gaussian';
+      const isAdd = (op.mode || 'add') === 'add';
+      const nPts = (op.points || []).length;
+      html += `<div class="mod-box">
+        <div class="mod-head">
+          <span>${isAdd ? '+ Add' : '− Remove'}: ${op.id} <span class="mono">(${nPts} pts)</span></span>
+          <button class="btn sm danger" onclick="removeOperation(${idx})">Remove</button>
+        </div>
+        ${sliderField('op_' + idx, isAdd ? 'Build-up Depth' : 'Carve Depth', 0.5, 12, 0.5, Math.abs(op.offset_mm ?? 3.0), 'mm',
+          `v => { state.recipe.operations[${idx}].offset_mm = v; }`)}
+        ${sliderField('op_r_' + idx, 'Brush Radius', 8, 60, 1, op.radius_mm ?? 22.0, 'mm',
+          `v => { state.recipe.operations[${idx}].radius_mm = v; }`)}
+        <label class="field" style="margin-bottom:0;">
+          <span class="lbl"><span>Falloff Profile</span></span>
+          <select onchange="state.recipe.operations[${idx}].falloff = this.value;">
+            <option value="gaussian" ${fall === 'gaussian' ? 'selected' : ''}>Smooth Gaussian</option>
+            <option value="flat_pad" ${fall === 'flat_pad' ? 'selected' : ''}>Flat Plateau Pad</option>
+          </select>
+        </label>
+      </div>`;
+    } else if (op.op === 'smooth') {
+      const local = (op.points && op.points.length) || op.xyz;
+      html += `<div class="mod-box">
+        <div class="mod-head">
+          <span>≈ ${local ? 'Local Smooth' : 'Global Smooth'}: ${op.id}</span>
+          <button class="btn sm danger" onclick="removeOperation(${idx})">Remove</button>
+        </div>
+        ${sliderField('op_it_' + idx, 'Taubin Passes', 1, 16, 1, op.iterations ?? 4, 'passes',
+          `v => { state.recipe.operations[${idx}].iterations = Math.round(v); }`)}
+        ${sliderField('op_st_' + idx, 'Smooth Strength', 0.1, 0.9, 0.05, op.strength ?? 0.55, '',
+          `v => { state.recipe.operations[${idx}].strength = v; }`)}
+        ${local ? sliderField('op_sr_' + idx, 'Smooth Radius', 10, 70, 2, op.radius_mm ?? 30.0, 'mm',
+          `v => { state.recipe.operations[${idx}].radius_mm = v; }`) : ''}
       </div>`;
     } else if (op.op === 'afo_posture') {
       html += sliderField('op_df_' + idx, 'Dorsiflexion correction', -15, 25, 1, op.dorsiflexion_deg, '°',
@@ -1320,6 +1452,19 @@ function drawOverlays(mvp) {
   if (document.getElementById('chkTrimline') && document.getElementById('chkTrimline').checked && state.activeMeshKey !== 'shell' && state.recipe && state.recipe.shell && state.recipe.shell.trimline) {
     buildTrimlineOverlay(m, state.recipe.shell.trimline, lmPts, lmCols);
   }
+  if (state.activeStrokePoints && state.activeStrokePoints.length) {
+    const sCol = state.sculptTool === 'remove' ? [0.25, 0.72, 1.0] : (state.sculptTool === 'smooth' ? [0.20, 0.92, 0.78] : [1.0, 0.62, 0.15]);
+    const pts = state.activeStrokePoints;
+    for (let k = 0; k < pts.length - 1; k++) {
+      lmPts.push(...pts[k], ...pts[k + 1]);
+      lmCols.push(...sCol, ...sCol);
+    }
+    for (const p of pts) {
+      const s = 3.5;
+      lmPts.push(p[0]-s, p[1], p[2], p[0]+s, p[1], p[2], p[0], p[1]-s, p[2], p[0], p[1]+s, p[2], p[0], p[1], p[2]-s, p[0], p[1], p[2]+s);
+      lmCols.push(...sCol, ...sCol, ...sCol, ...sCol, ...sCol, ...sCol);
+    }
+  }
   if (document.getElementById('chkLandmarks').checked && state.recipe && state.recipe.landmarks) {
     for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
       const p = spec.xyz;
@@ -1406,9 +1551,62 @@ function pickSurfacePoint(clientX, clientY) {
   return bestPt;
 }
 
-let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
-canvas.addEventListener('mousedown', e => { dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY; });
+let dragging = false, dragMoved = false, sculptPainting = false, lastX = 0, lastY = 0;
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('mousedown', e => {
+  lastX = e.clientX; lastY = e.clientY;
+  dragMoved = false;
+  if (state.sculptTool && e.button === 0 && !e.shiftKey && !e.altKey) {
+    sculptPainting = true;
+    const pt = pickSurfacePoint(e.clientX, e.clientY);
+    state.activeStrokePoints = pt ? [pt.map(v => Number(v.toFixed(2)))] : [];
+    drawScene();
+    return;
+  }
+  dragging = true;
+});
 window.addEventListener('mouseup', e => {
+  if (sculptPainting) {
+    sculptPainting = false;
+    const pts = state.activeStrokePoints || [];
+    state.activeStrokePoints = [];
+    if (pts.length && state.recipe && state.sculptTool) {
+      const mode = state.sculptTool;
+      const rad = Math.max(8, Number(document.getElementById('sculptRadius').value || 22));
+      if (mode === 'smooth') {
+        const iters = Math.max(1, Math.min(20, parseInt(document.getElementById('smoothIters').value || '4', 10)));
+        let n = 1;
+        while (state.recipe.operations.some(o => o.id === 'smooth_brush_' + n)) n++;
+        state.recipe.operations.push({
+          op: 'smooth',
+          id: 'smooth_brush_' + n,
+          points: pts,
+          radius_mm: rad,
+          iterations: iters,
+          strength: 0.6
+        });
+      } else {
+        const mag = Math.max(0.5, Number(document.getElementById('sculptOffset').value || 3.5));
+        const fall = document.getElementById('sculptFalloff').value || 'gaussian';
+        let n = 1;
+        while (state.recipe.operations.some(o => o.id === `sculpt_${mode}_${n}`)) n++;
+        state.recipe.operations.push({
+          op: 'sculpt_stroke',
+          id: `sculpt_${mode}_${n}`,
+          mode,
+          points: pts,
+          offset_mm: mag,
+          radius_mm: rad,
+          falloff: fall
+        });
+      }
+      renderRectifyControls();
+      runRectify();
+    } else {
+      drawScene();
+    }
+    return;
+  }
   if (dragging && !dragMoved && state.armedTrimlineDraw) {
     const pt = pickSurfacePoint(e.clientX, e.clientY);
     if (pt) {
@@ -1456,6 +1654,18 @@ window.addEventListener('mouseup', e => {
   dragging = false;
 });
 window.addEventListener('mousemove', e => {
+  if (sculptPainting) {
+    const pt = pickSurfacePoint(e.clientX, e.clientY);
+    if (pt) {
+      const pts = state.activeStrokePoints;
+      const prev = pts.length ? pts[pts.length - 1] : null;
+      if (!prev || Math.hypot(pt[0]-prev[0], pt[1]-prev[1], pt[2]-prev[2]) >= 5.0) {
+        pts.push(pt.map(v => Number(v.toFixed(2))));
+        drawScene();
+      }
+    }
+    return;
+  }
   if (!dragging) return;
   const dx = e.clientX - lastX, dy = e.clientY - lastY;
   if (Math.hypot(dx, dy) > 2) dragMoved = true;

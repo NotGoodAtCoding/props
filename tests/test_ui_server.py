@@ -42,7 +42,22 @@ class TestUIServer(unittest.TestCase):
             # 1. Index HTML + Health + new UI controls present
             html = opener.open(f"{base}/").read().decode("utf-8")
             self.assertIn("op-core 3D Clinical Workstation", html)
-            for token in ('id="renderMode"', "wire_only", "uKeyLightDir", "armCustomMod", "addCustomZone", "gl.GREATER", "uAlpha", "landmarkTags", "chkTrimline", "toggleTrimlineDraw", "buildTrimlineOverlay"):
+            for token in (
+                'id="renderMode"',
+                "wire_only",
+                "uKeyLightDir",
+                "armCustomMod",
+                "addCustomZone",
+                "gl.GREATER",
+                "uAlpha",
+                "landmarkTags",
+                "chkTrimline",
+                "toggleTrimlineDraw",
+                "buildTrimlineOverlay",
+                "toggleSculptTool",
+                "addGlobalSmooth",
+                "sculpt_stroke",
+            ):
                 self.assertIn(token, html)
             health = json.loads(opener.open(f"{base}/api/health").read().decode("utf-8"))
             self.assertEqual(health["status"], "ok")
@@ -68,6 +83,21 @@ class TestUIServer(unittest.TestCase):
                 "z_range_mm": [-150.0, -90.0],
                 "percent": 3.5,
                 "transition_mm": 18.0,
+            })
+            sample["recipe"]["operations"].append({
+                "op": "sculpt_stroke",
+                "id": "sculpt_add_1",
+                "mode": "add",
+                "points": [[12.0, -10.0, -45.0], [10.0, -12.0, -65.0]],
+                "offset_mm": 4.0,
+                "radius_mm": 22.0,
+                "falloff": "gaussian",
+            })
+            sample["recipe"]["operations"].append({
+                "op": "smooth",
+                "id": "smooth_global_1",
+                "iterations": 3,
+                "strength": 0.5,
             })
 
             req_rect = urllib.request.Request(
