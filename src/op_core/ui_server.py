@@ -238,6 +238,16 @@ _HTML_PAGE = r"""<!DOCTYPE html>
   }
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
   .hud-bottom.armed { border-color: var(--accent); color: #fff; background: rgba(2, 132, 199, 0.88); }
+  .lm-tags { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .lm-tag {
+    position: absolute; transform: translate(8px, -50%);
+    background: rgba(15, 23, 42, 0.78); color: #fde68a; border: 1px solid rgba(251, 191, 36, 0.55);
+    border-radius: 4px; padding: 1px 5px; font-size: 10px; font-family: ui-monospace, monospace;
+    white-space: nowrap;
+  }
+  .lm-tag.armed {
+    color: #bbf7d0; border-color: #22c55e; background: rgba(20, 83, 45, 0.88); font-weight: 700;
+  }
   table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
   th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--border); }
   th:first-child, td:first-child { text-align: left; }
@@ -386,6 +396,7 @@ _HTML_PAGE = r"""<!DOCTYPE html>
 
   <section class="viewport-wrap">
     <canvas id="glCanvas"></canvas>
+    <div id="landmarkTags" class="lm-tags"></div>
     <div class="hud-top">
       <div class="hud-card" id="meshHud">No mesh loaded</div>
       <div class="hud-card row">
@@ -831,8 +842,9 @@ function initGL() {
     void main() { vCol = aCol; gl_Position = uMVP * vec4(aPos, 1.0); }`;
   const lfs = `
     precision mediump float;
+    uniform float uAlpha;
     varying vec3 vCol;
-    void main() { gl_FragColor = vec4(vCol, 1.0); }`;
+    void main() { gl_FragColor = vec4(vCol, uAlpha); }`;
   function compile(type, src) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src);
@@ -1034,45 +1046,11 @@ function drawScene() {
   drawOverlays(camInfo.mvp);
 }
 
-function drawOverlays(mvp) {
-  if (!lineProg) return;
-  const pts = [], cols = [];
-  const m = getDisplayMesh();
-  if (document.getElementById('chkSlices').checked && state.qa && state.qa.slices && m) {
-    const cx = m.center[0], cy = m.center[1];
-    const r = Math.max(Math.abs(m.bounds.max[0]-m.bounds.min[0]), Math.abs(m.bounds.max[1]-m.bounds.min[1])) * 0.58;
-    const segs = 36;
-    for (const s of state.qa.slices) {
-      const z = s.z_mm;
-      for (let k = 0; k < segs; k++) {
-        const a0 = 2 * Math.PI * k / segs, a1 = 2 * Math.PI * (k + 1) / segs;
-        pts.push(cx + r*Math.cos(a0), cy + r*Math.sin(a0), z, cx + r*Math.cos(a1), cy + r*Math.sin(a1), z);
-        cols.push(0.22, 0.74, 0.97, 0.22, 0.74, 0.97);
-      }
-    }
-  }
-  if (document.getElementById('chkLandmarks').checked && state.recipe && state.recipe.landmarks) {
-    for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
-      const p = spec.xyz;
-      if (!p) continue;
-      const armed = state.armedLandmark === name;
-      const col = armed ? [0.13, 0.85, 0.45] : [0.98, 0.75, 0.15];
-      const s = armed ? 9.0 : 6.0;
-      const segs = [
-        [p[0]-s, p[1], p[2], p[0]+s, p[1], p[2]],
-        [p[0], p[1]-s, p[2], p[0], p[1]+s, p[2]],
-        [p[0], p[1], p[2]-s, p[0], p[1], p[2]+s],
-        [p[0]-s, p[1], p[2], p[0], p[1]+s, p[2]],
-        [p[0], p[1]+s, p[2], p[0]+s, p[1], p[2]],
-        [p[0]+s, p[1], p[2], p[0], p[1]-s, p[2]],
-        [p[0], p[1]-s, p[2], p[0]-s, p[1], p[2]]
-      ];
-      for (const sg of segs) { pts.push(...sg); cols.push(...col, ...col); }
-    }
-  }
+function drawLineBatch(pts, cols, mvp, alpha) {
   if (!pts.length) return;
   gl.useProgram(lineProg);
   gl.uniformMatrix4fv(gl.getUniformLocation(lineProg, 'uMVP'), false, mvp);
+  gl.uniform1f(gl.getUniformLocation(lineProg, 'uAlpha'), alpha);
   const lp = gl.getAttribLocation(lineProg, 'aPos');
   gl.bindBuffer(gl.ARRAY_BUFFER, vboOvPos);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pts), gl.DYNAMIC_DRAW);
@@ -1084,6 +1062,91 @@ function drawOverlays(mvp) {
   gl.enableVertexAttribArray(lc);
   gl.vertexAttribPointer(lc, 3, gl.FLOAT, false, 0, 0);
   gl.drawArrays(gl.LINES, 0, pts.length / 3);
+}
+
+function renderLandmarkTags(mvp) {
+  const wrap = document.getElementById('landmarkTags');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!document.getElementById('chkLandmarks').checked || !state.recipe || !state.recipe.landmarks) return;
+  for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
+    const p = spec.xyz;
+    if (!p) continue;
+    const cx = mvp[0]*p[0] + mvp[4]*p[1] + mvp[8]*p[2] + mvp[12];
+    const cy = mvp[1]*p[0] + mvp[5]*p[1] + mvp[9]*p[2] + mvp[13];
+    const cw = mvp[3]*p[0] + mvp[7]*p[1] + mvp[11]*p[2] + mvp[15];
+    if (cw <= 1e-4) continue;
+    const nx = cx / cw, ny = cy / cw;
+    if (nx < -1.05 || nx > 1.05 || ny < -1.05 || ny > 1.05) continue;
+    const tag = document.createElement('div');
+    tag.className = 'lm-tag' + (state.armedLandmark === name ? ' armed' : '');
+    tag.textContent = name;
+    tag.style.left = ((nx * 0.5 + 0.5) * 100).toFixed(2) + '%';
+    tag.style.top = ((0.5 - ny * 0.5) * 100).toFixed(2) + '%';
+    wrap.appendChild(tag);
+  }
+}
+
+function drawOverlays(mvp) {
+  if (!lineProg) return;
+  const slicePts = [], sliceCols = [];
+  const lmPts = [], lmCols = [];
+  const m = getDisplayMesh();
+  if (document.getElementById('chkSlices').checked && state.qa && state.qa.slices && m) {
+    const cx = m.center[0], cy = m.center[1];
+    const r = Math.max(Math.abs(m.bounds.max[0]-m.bounds.min[0]), Math.abs(m.bounds.max[1]-m.bounds.min[1])) * 0.58;
+    const segs = 36;
+    for (const s of state.qa.slices) {
+      const z = s.z_mm;
+      for (let k = 0; k < segs; k++) {
+        const a0 = 2 * Math.PI * k / segs, a1 = 2 * Math.PI * (k + 1) / segs;
+        slicePts.push(cx + r*Math.cos(a0), cy + r*Math.sin(a0), z, cx + r*Math.cos(a1), cy + r*Math.sin(a1), z);
+        sliceCols.push(0.22, 0.74, 0.97, 0.22, 0.74, 0.97);
+      }
+    }
+  }
+  if (document.getElementById('chkLandmarks').checked && state.recipe && state.recipe.landmarks) {
+    for (const [name, spec] of Object.entries(state.recipe.landmarks)) {
+      const p = spec.xyz;
+      if (!p) continue;
+      const armed = state.armedLandmark === name;
+      const col = armed ? [0.13, 0.90, 0.45] : [0.98, 0.78, 0.15];
+      const s = armed ? 10.5 : 7.5;
+      const segs = [
+        [p[0]-s, p[1], p[2], p[0]+s, p[1], p[2]],
+        [p[0], p[1]-s, p[2], p[0], p[1]+s, p[2]],
+        [p[0], p[1], p[2]-s, p[0], p[1], p[2]+s],
+        [p[0]-s, p[1], p[2], p[0], p[1]+s, p[2]],
+        [p[0], p[1]+s, p[2], p[0]+s, p[1], p[2]],
+        [p[0]+s, p[1], p[2], p[0], p[1]-s, p[2]],
+        [p[0], p[1]-s, p[2], p[0]-s, p[1], p[2]],
+        [p[0]-s, p[1], p[2], p[0], p[1], p[2]+s],
+        [p[0], p[1], p[2]+s, p[0]+s, p[1], p[2]],
+        [p[0]+s, p[1], p[2], p[0], p[1], p[2]-s],
+        [p[0], p[1], p[2]-s, p[0]-s, p[1], p[2]]
+      ];
+      for (const sg of segs) { lmPts.push(...sg); lmCols.push(...col, ...col); }
+    }
+  }
+  gl.depthFunc(gl.LEQUAL);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+  drawLineBatch(slicePts, sliceCols, mvp, 1.0);
+
+  if (lmPts.length) {
+    // Pass 1: crisp unoccluded parts in front of the surface
+    drawLineBatch(lmPts, lmCols, mvp, 1.0);
+    // Pass 2: X-ray pass visible through the solid mesh so landmarks can be verified from any angle
+    gl.depthFunc(gl.GREATER);
+    gl.depthMask(false);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    drawLineBatch(lmPts, lmCols, mvp, 0.50);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
+  renderLandmarkTags(mvp);
 }
 
 function pickSurfacePoint(clientX, clientY) {
