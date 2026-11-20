@@ -69,21 +69,22 @@ def rodrigues_rotate(v: Vec3, axis: Vec3, angle_rad: float, origin: Vec3 = (0.0,
     return v_add(rotated, origin)
 
 
-def jacobi_eigen_3x3(cov: list[list[float]], max_iter: int = 50) -> tuple[list[float], list[Vec3]]:
-    """Compute eigenvalues and eigenvectors of a symmetric 3x3 matrix via Jacobi rotations.
+def jacobi_eigen_sym(mat: list[list[float]], max_iter: int = 80) -> tuple[list[float], list[list[float]]]:
+    """Compute eigenvalues and eigenvectors of an NxN symmetric matrix via Jacobi rotations.
 
-    Returns eigenvalues sorted descending alongside their unit eigenvectors.
+    Returns eigenvalues sorted descending alongside corresponding unit column eigenvectors.
     """
-    a = [[cov[i][j] for j in range(3)] for i in range(3)]
-    v = [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+    n = len(mat)
+    a = [[mat[i][j] for j in range(n)] for i in range(n)]
+    v = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
 
     for _ in range(max_iter):
-        p, q = 0, 1
-        max_off = abs(a[0][1])
-        for i, j in ((0, 2), (1, 2)):
-            if abs(a[i][j]) > max_off:
-                max_off = abs(a[i][j])
-                p, q = i, j
+        p, q, max_off = 0, 1, 0.0
+        for i in range(n):
+            for j in range(i + 1, n):
+                if abs(a[i][j]) > max_off:
+                    max_off = abs(a[i][j])
+                    p, q = i, j
         if max_off < 1e-12:
             break
 
@@ -99,23 +100,30 @@ def jacobi_eigen_3x3(cov: list[list[float]], max_iter: int = 50) -> tuple[list[f
         a[q][q] = s * s * app + 2.0 * s * c * apq + c * c * aqq
         a[p][q] = a[q][p] = 0.0
 
-        for r in range(3):
+        for r in range(n):
             if r != p and r != q:
                 arp, arq = a[r][p], a[r][q]
                 a[r][p] = a[p][r] = c * arp - s * arq
                 a[r][q] = a[q][r] = s * arp + c * arq
 
-        for r in range(3):
+        for r in range(n):
             vrp, vrq = v[r][p], v[r][q]
             v[r][p] = c * vrp - s * vrq
             v[r][q] = s * vrp + c * vrq
 
-    pairs = [
-        (a[i][i], v_unit((v[0][i], v[1][i], v[2][i])))
-        for i in range(3)
-    ]
+    pairs = []
+    for i in range(n):
+        vec = [v[r][i] for r in range(n)]
+        norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+        pairs.append((a[i][i], [x / norm for x in vec]))
     pairs.sort(key=lambda item: item[0], reverse=True)
     return [p[0] for p in pairs], [p[1] for p in pairs]
+
+
+def jacobi_eigen_3x3(cov: list[list[float]], max_iter: int = 50) -> tuple[list[float], list[Vec3]]:
+    """Compute eigenvalues and eigenvectors of a symmetric 3x3 matrix via Jacobi rotations."""
+    vals, vecs = jacobi_eigen_sym(cov, max_iter=max_iter)
+    return vals, [(v[0], v[1], v[2]) for v in vecs]
 
 
 def smoothstep5(t: float) -> float:

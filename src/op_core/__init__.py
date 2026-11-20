@@ -4,6 +4,7 @@ from .carver_cam import CarverCamResult, generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
 from .linter import LintReport, export_fabrication_dossier, export_fabrication_dossier_pdf, lint_device
 from .mesh import TriMesh, read_stl, write_binary_stl
+from .metrology import ScanComparisonResult, compare_scans, has_ampscan, horn_rigid_transform, icp_align_scans
 from .recipe import OpRecipe, diff_recipes, mesh_sha256
 from .rectify import RectificationResult, apply_afo_posture, apply_recipe
 from .repair import (
@@ -32,6 +33,7 @@ __all__ = [
     "OpRecipe",
     "RectificationResult",
     "RepairReport",
+    "ScanComparisonResult",
     "ScanQAReport",
     "ShellBuildResult",
     "TriMesh",
@@ -42,6 +44,7 @@ __all__ = [
     "build_tf_socket_shell",
     "build_tt_socket_shell",
     "clip_mesh_z",
+    "compare_scans",
     "diff_recipes",
     "export_3mf",
     "export_carver_positive",
@@ -50,7 +53,10 @@ __all__ = [
     "fill_small_holes",
     "fix_consistent_winding",
     "generate_4axis_gcode_and_simulate",
+    "has_ampscan",
     "has_manifold3d",
+    "horn_rigid_transform",
+    "icp_align_scans",
     "lint_device",
     "measure_circumferences",
     "mesh_sha256",

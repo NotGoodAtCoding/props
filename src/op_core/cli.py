@@ -10,6 +10,7 @@ from .carver_cam import generate_4axis_gcode_and_simulate
 from .export_3mf import export_3mf
 from .linter import export_fabrication_dossier, lint_device
 from .mesh import read_stl, write_binary_stl
+from .metrology import compare_scans
 from .recipe import OpRecipe, diff_recipes, mesh_sha256
 from .rectify import apply_recipe
 from .scan_qa import run_scan_qa
@@ -105,6 +106,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  op-core lint ./out/device_shell.stl --min-wall-mm 2.5\n"
             "  op-core diff v1.oprecipe.json v2.oprecipe.json\n"
             "  op-core cam ./out/carver_positive.stl --out-gcode ./out/carver.gcode\n"
+            "  op-core compare visit1.stl visit2.stl --out-stl visit2_aligned.stl\n"
             "  op-core ui --port 8765\n\n"
             "Docs: see docs/getting_started.md and docs/cli_and_tools_reference.md"
         ),
@@ -210,6 +212,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cam.add_argument("positive_stl", help="Path to carver_positive.stl (or rectified positive STL)")
     p_cam.add_argument("--out-gcode", required=True, help="Output .gcode / .nc file path")
     p_cam.add_argument("--ball-radius-mm", type=float, default=4.0, help="Ball-nose cutter radius in mm (default: 4.0)")
+
+    p_cmp = sub.add_parser(
+        "compare",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        help="ICP-align two scans and report surface RMSE and limb volume change",
+        description="Align a follow-up scan onto a baseline scan via 3D ICP and compute limb maturation volume delta.",
+        epilog="Example:\n  op-core compare visit1.stl visit2.stl --out-stl visit2_aligned.stl",
+    )
+    p_cmp.add_argument("baseline_stl", help="Baseline .stl scan")
+    p_cmp.add_argument("followup_stl", help="Follow-up or rectified .stl scan")
+    p_cmp.add_argument("--out-stl", help="Optional path to save ICP-aligned follow-up STL")
 
     p_ui = sub.add_parser(
         "ui",
@@ -365,6 +378,23 @@ def main(argv: list[str] | None = None) -> int:
             "warnings": cam_res.warnings,
         }, indent=2))
         return 0 if cam_res.max_gouge_mm == 0.0 and cam_res.mandrel_collisions == 0 else 1
+
+    if args.cmd == "compare":
+        m_base = read_stl(args.baseline_stl)
+        m_fol = read_stl(args.followup_stl)
+        res = compare_scans(m_base, m_fol, align_icp=True)
+        if args.out_stl:
+            write_binary_stl(res.aligned_followup, args.out_stl)
+        print(json.dumps({
+            "rmse_mm": round(res.rmse_mm, 3),
+            "mean_signed_dev_mm": round(res.mean_signed_dev_mm, 3),
+            "max_abs_dev_mm": round(res.max_abs_dev_mm, 3),
+            "baseline_volume_ml": round(res.baseline_volume_ml, 1),
+            "followup_volume_ml": round(res.followup_volume_ml, 1),
+            "volume_change_pct": round(res.volume_change_pct, 2),
+            "icp_iterations": res.icp_iterations,
+        }, indent=2))
+        return 0
 
     if args.cmd == "ui":
         serve_ui(host=args.host, port=args.port, open_browser=not args.no_browser)
